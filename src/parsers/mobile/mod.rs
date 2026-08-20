@@ -1,7 +1,9 @@
+pub(crate) mod android;
 pub(crate) mod common;
 pub(crate) mod ios;
 pub(crate) mod sqlite;
 
+pub use android::sms::AndroidSmsParser;
 pub use ios::calendar::IosCalendarParser;
 pub use ios::callhistory::IosCallHistoryParser;
 pub use ios::contacts::IosContactsParser;

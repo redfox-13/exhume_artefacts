@@ -1,4 +1,7 @@
 use crate::core::{CompanionSpec, ObjectParsed, Parser, ParserInput, TimelineEvent};
+use crate::parsers::mobile::common::records::{
+    AppInfo, ChatMessage, Conversation, Direction, MessageState, Party,
+};
 use crate::parsers::mobile::common::timestamps::apple_nanoseconds_to_json;
 use crate::parsers::mobile::sqlite::{
     SqliteConnection, SqliteEvidence, SqliteSchema, SqliteStatement, select_column,
@@ -7,11 +10,100 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
 const PARSER_NAME: &str = "mobile_ios_imessage";
+const APP: AppInfo = AppInfo {
+    bundle_id: "com.apple.MobileSMS",
+    label: "iMessage",
+};
 const SCHEMA_VARIANT: &str = "ios_smsdb_v1";
 const SQLITE_COMPANIONS: &[CompanionSpec] = &[
     CompanionSpec::optional_suffix("sqlite_wal", "-wal"),
     CompanionSpec::optional_suffix("sqlite_shm", "-shm"),
 ];
+
+/// Everything that differs between the iOS (`sms.db`) and macOS (`chat.db`)
+/// Messages parsers. The database schema, SQL and emitted `kind`s are identical,
+/// so the macOS parser reuses this whole engine with a different config.
+pub(crate) struct MessagesConfig {
+    pub parser_name: &'static str,
+    /// `"ios"` or `"macos"` — recorded on every emitted object.
+    pub platform: &'static str,
+    /// Short app label used in the app-specific JSON blocks.
+    pub app_label: &'static str,
+    pub app: AppInfo,
+    pub schema_variant: &'static str,
+    /// Filename the DB is materialized as in the temp dir.
+    pub filename: &'static str,
+}
+
+const IOS_CONFIG: MessagesConfig = MessagesConfig {
+    parser_name: PARSER_NAME,
+    platform: "ios",
+    app_label: "imessage",
+    app: APP,
+    schema_variant: SCHEMA_VARIANT,
+    filename: "sms.db",
+};
+
+/// Run the Apple Messages engine end-to-end for either platform.
+pub(crate) fn run_messages(
+    cfg: &MessagesConfig,
+    input: ParserInput,
+    sink: &mut dyn FnMut(ObjectParsed) -> Result<()>,
+) -> Result<()> {
+    let evidence = SqliteEvidence::from_input(input, cfg.filename)?;
+    let conn = SqliteConnection::open(evidence.path())?;
+    let schema = conn.schema()?;
+    validate_schema(&schema)?;
+
+    emit_chats(cfg, &conn, &schema, &evidence, sink)?;
+    emit_messages(cfg, &conn, &schema, &evidence, sink)?;
+    emit_attachments(cfg, &conn, &schema, &evidence, sink)?;
+
+    Ok(())
+}
+
+/// Timeline extraction is identical for both platforms (same `kind`s and JSON).
+pub(crate) fn extract_message_timeline(obj: &ObjectParsed) -> Vec<TimelineEvent> {
+    match obj.kind {
+        "mobile.communication.message" => {
+            let Some(ts_unix_ms) = obj.json["timestamps"]["message"]["unix_ms"].as_i64() else {
+                return Vec::new();
+            };
+            let description = obj.json["details"]["message"]["display_text"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned);
+            let actor = if obj.json["direction"].as_str() == Some("incoming") {
+                obj.json["sender"]["id"].as_str().map(str::to_owned)
+            } else {
+                None
+            };
+            vec![TimelineEvent {
+                ts_unix_ms,
+                event_type: "mobile.communication.message",
+                description,
+                actor,
+            }]
+        }
+        "mobile.communication.attachment" => {
+            let Some(ts_unix_ms) = obj.json["timestamps"]["message"]["unix_ms"].as_i64() else {
+                return Vec::new();
+            };
+            let description = obj.json["attachment"]["file_name"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .or_else(|| obj.json["attachment"]["kind"].as_str())
+                .map(str::to_owned);
+            vec![TimelineEvent {
+                ts_unix_ms,
+                event_type: "mobile.communication.attachment",
+                description,
+                actor: None,
+            }]
+        }
+        _ => Vec::new(),
+    }
+}
 
 #[derive(Default)]
 pub struct IosIMessageParser;
@@ -30,45 +122,7 @@ impl Parser for IosIMessageParser {
     }
 
     fn extract_timeline_events(&self, obj: &ObjectParsed) -> Vec<TimelineEvent> {
-        match obj.kind {
-            "mobile.communication.message" => {
-                let Some(ts_unix_ms) = obj.json["timestamps"]["message"]["unix_ms"].as_i64() else {
-                    return Vec::new();
-                };
-                let description = obj.json["message"]["display_text"]
-                    .as_str()
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_owned);
-                let actor = if obj.json["direction"].as_str() == Some("incoming") {
-                    obj.json["sender"]["id"].as_str().map(str::to_owned)
-                } else {
-                    None
-                };
-                vec![TimelineEvent {
-                    ts_unix_ms,
-                    event_type: "mobile.communication.message",
-                    description,
-                    actor,
-                }]
-            }
-            "mobile.communication.attachment" => {
-                let Some(ts_unix_ms) = obj.json["timestamps"]["message"]["unix_ms"].as_i64() else {
-                    return Vec::new();
-                };
-                let description = obj.json["attachment"]["file_name"]
-                    .as_str()
-                    .filter(|s| !s.is_empty())
-                    .or_else(|| obj.json["attachment"]["kind"].as_str())
-                    .map(str::to_owned);
-                vec![TimelineEvent {
-                    ts_unix_ms,
-                    event_type: "mobile.communication.attachment",
-                    description,
-                    actor: None,
-                }]
-            }
-            _ => Vec::new(),
-        }
+        extract_message_timeline(obj)
     }
 
     fn run_into(
@@ -76,16 +130,7 @@ impl Parser for IosIMessageParser {
         input: ParserInput,
         sink: &mut dyn FnMut(ObjectParsed) -> Result<()>,
     ) -> Result<()> {
-        let evidence = SqliteEvidence::from_input(input, "sms.db")?;
-        let conn = SqliteConnection::open(evidence.path())?;
-        let schema = conn.schema()?;
-        validate_schema(&schema)?;
-
-        emit_chats(&conn, &schema, &evidence, sink)?;
-        emit_messages(&conn, &schema, &evidence, sink)?;
-        emit_attachments(&conn, &schema, &evidence, sink)?;
-
-        Ok(())
+        run_messages(&IOS_CONFIG, input, sink)
     }
 }
 
@@ -111,6 +156,7 @@ fn validate_schema(schema: &SqliteSchema) -> Result<()> {
 }
 
 fn emit_chats(
+    cfg: &MessagesConfig,
     conn: &SqliteConnection,
     schema: &SqliteSchema,
     evidence: &SqliteEvidence,
@@ -177,10 +223,10 @@ fn emit_chats(
             .or_else(|| row.text(1))
             .unwrap_or_default();
         let json = json!({
-            "platform": "ios",
-            "app": "imessage",
+            "platform": cfg.platform,
+            "app": cfg.app_label,
             "record_type": "chat",
-            "source": source_json(evidence, "chat", chat_rowid),
+            "source": source_json(cfg, evidence, "chat", chat_rowid),
             "chat": {
                 "rowid": chat_rowid,
                 "guid": row.text(1),
@@ -202,7 +248,7 @@ fn emit_chats(
         });
 
         sink(ObjectParsed {
-            parser: PARSER_NAME,
+            parser: cfg.parser_name,
             kind: "mobile.communication.chat",
             text,
             json,
@@ -211,6 +257,7 @@ fn emit_chats(
 }
 
 fn emit_messages(
+    cfg: &MessagesConfig,
     conn: &SqliteConnection,
     schema: &SqliteSchema,
     evidence: &SqliteEvidence,
@@ -397,10 +444,11 @@ fn emit_messages(
         ),
     );
 
-    conn.query_rows(&sql, |row| emit_message(row, evidence, sink))
+    conn.query_rows(&sql, |row| emit_message(cfg, row, evidence, sink))
 }
 
 fn emit_message(
+    cfg: &MessagesConfig,
     row: &SqliteStatement<'_>,
     evidence: &SqliteEvidence,
     sink: &mut dyn FnMut(ObjectParsed) -> Result<()>,
@@ -409,72 +457,119 @@ fn emit_message(
     let text = row.text(2);
     let is_from_me = row.bool(9);
     let classification = classify_message(row, text.as_deref());
-    let json = json!({
-        "platform": "ios",
-        "app": "imessage",
-        "record_type": "message",
-        "source": source_json(evidence, "message", message_rowid),
-        "timestamps": {
-            "message": apple_nanoseconds_to_json(row.i64(6)),
-            "read": apple_nanoseconds_to_json(row.i64(7)),
-            "delivered": apple_nanoseconds_to_json(row.i64(8)),
-            "edited": apple_nanoseconds_to_json(row.i64(32)),
-            "retracted": apple_nanoseconds_to_json(row.i64(33)),
-        },
-        "direction": direction_label(is_from_me),
-        "message": {
-            "rowid": message_rowid,
-            "guid": row.text(1),
-            "text": text.clone(),
-            "display_text": classification.display_text,
-            "subject": row.text(3),
-            "service": row.text(4),
-            "account": row.text(5),
-            "type_family": classification.type_family,
-            "item_type_code": row.i64(28),
-            "error_code": row.i64(13),
-            "read": row.bool(10),
-            "sent": row.bool(11),
-            "delivered": row.bool(12),
-            "system_message": row.bool(14),
-            "service_message": row.bool(15),
-            "has_attachments": row.bool(16),
-            "audio_message": row.bool(34),
-            "associated_message_guid": row.text(29),
-            "associated_message_type_code": row.i64(30),
-            "reply_to_guid": row.text(31),
-            "group_title": row.text(35),
-            "expressive_send_style_id": row.text(36),
-            "balloon_bundle_id": row.text(37),
-        },
-        "chat": {
-            "rowid": row.i64(22),
-            "guid": row.text(23),
-            "identifier": row.text(24),
-            "display_name": row.text(25),
-            "service": row.text(26),
-            "room_name": row.text(27),
-        },
-        "sender": party_json(is_from_me, true, row),
-        "recipient": party_json(is_from_me, false, row),
-        "handle": {
-            "rowid": row.i64(17),
-            "id": row.text(18),
-            "service": row.text(19),
-            "uncanonicalized_id": row.text(20),
-            "country": row.text(21),
-        },
-    });
+    let conversation_id = row
+        .i64(22)
+        .map(|id| id.to_string())
+        .or_else(|| row.text(23))
+        .or_else(|| row.text(24))
+        .unwrap_or_else(|| "unknown".to_string());
+    let handle_id = row.text(18);
+    let outgoing = is_from_me == Some(true);
 
-    sink(ObjectParsed {
-        parser: PARSER_NAME,
-        kind: "mobile.communication.message",
-        text: text.unwrap_or_default(),
-        json,
-    })
+    let message = ChatMessage {
+        parser: cfg.parser_name,
+        platform: cfg.platform,
+        app: cfg.app,
+        conversation: Conversation {
+            id: conversation_id,
+            display_name: row.text(25).or_else(|| row.text(24)),
+            participants: handle_id
+                .clone()
+                .map(|id| {
+                    vec![Party {
+                        id: Some(id),
+                        display_name: None,
+                        is_self: false,
+                    }]
+                })
+                .unwrap_or_default(),
+        },
+        direction: Direction::from_is_from_me(is_from_me),
+        sender: if outgoing {
+            Party {
+                id: None,
+                display_name: None,
+                is_self: true,
+            }
+        } else {
+            Party {
+                id: handle_id,
+                display_name: None,
+                is_self: false,
+            }
+        },
+        timestamp: apple_nanoseconds_to_json(row.i64(6)),
+        sent: if outgoing {
+            apple_nanoseconds_to_json(row.i64(6))
+        } else {
+            Value::Null
+        },
+        received: if outgoing {
+            Value::Null
+        } else {
+            apple_nanoseconds_to_json(row.i64(6))
+        },
+        body: text.clone(),
+        // Attachments are emitted as their own records by emit_attachments.
+        attachments: Vec::new(),
+        state: MessageState {
+            read: row.bool(10),
+            delivered: row.bool(12),
+            deleted: None,
+        },
+        source: source_json(cfg, evidence, "message", message_rowid),
+        details: json!({
+            "message": {
+                "rowid": message_rowid,
+                "guid": row.text(1),
+                "display_text": classification.display_text,
+                "subject": row.text(3),
+                "service": row.text(4),
+                "account": row.text(5),
+                "type_family": classification.type_family,
+                "item_type_code": row.i64(28),
+                "error_code": row.i64(13),
+                "sent": row.bool(11),
+                "system_message": row.bool(14),
+                "service_message": row.bool(15),
+                "has_attachments": row.bool(16),
+                "audio_message": row.bool(34),
+                "associated_message_guid": row.text(29),
+                "associated_message_type_code": row.i64(30),
+                "reply_to_guid": row.text(31),
+                "group_title": row.text(35),
+                "expressive_send_style_id": row.text(36),
+                "balloon_bundle_id": row.text(37),
+            },
+            "timestamps": {
+                "read": apple_nanoseconds_to_json(row.i64(7)),
+                "delivered": apple_nanoseconds_to_json(row.i64(8)),
+                "edited": apple_nanoseconds_to_json(row.i64(32)),
+                "retracted": apple_nanoseconds_to_json(row.i64(33)),
+            },
+            "chat": {
+                "rowid": row.i64(22),
+                "guid": row.text(23),
+                "identifier": row.text(24),
+                "display_name": row.text(25),
+                "service": row.text(26),
+                "room_name": row.text(27),
+            },
+            "handle": {
+                "rowid": row.i64(17),
+                "id": row.text(18),
+                "service": row.text(19),
+                "uncanonicalized_id": row.text(20),
+                "country": row.text(21),
+            },
+        }),
+    };
+
+    sink(message.into())
 }
 
 fn emit_attachments(
+    cfg: &MessagesConfig,
     conn: &SqliteConnection,
     schema: &SqliteSchema,
     evidence: &SqliteEvidence,
@@ -587,10 +682,10 @@ fn emit_attachments(
             .or_else(|| filename.clone())
             .unwrap_or_default();
         let json = json!({
-            "platform": "ios",
-            "app": "imessage",
+            "platform": cfg.platform,
+            "app": cfg.app_label,
             "record_type": "attachment",
-            "source": source_json(evidence, "attachment", attachment_rowid),
+            "source": source_json(cfg, evidence, "attachment", attachment_rowid),
             "timestamps": {
                 "message": apple_nanoseconds_to_json(row.i64(16)),
                 "created": apple_nanoseconds_to_json(row.i64(2)),
@@ -628,7 +723,7 @@ fn emit_attachments(
         });
 
         sink(ObjectParsed {
-            parser: PARSER_NAME,
+            parser: cfg.parser_name,
             kind: "mobile.communication.attachment",
             text,
             json,
@@ -668,29 +763,6 @@ fn classify_message(row: &SqliteStatement<'_>, text: Option<&str>) -> MessageCla
     MessageClassification {
         type_family,
         display_text,
-    }
-}
-
-fn party_json(is_from_me: Option<bool>, sender: bool, row: &SqliteStatement<'_>) -> Value {
-    let is_me = matches!(
-        (is_from_me, sender),
-        (Some(true), true) | (Some(false), false)
-    );
-    if is_me {
-        json!({
-            "is_me": true,
-            "service": row.text(4),
-            "account": row.text(5),
-        })
-    } else {
-        json!({
-            "is_me": false,
-            "handle_id": row.i64(17),
-            "id": row.text(18),
-            "service": row.text(19),
-            "uncanonicalized_id": row.text(20),
-            "country": row.text(21),
-        })
     }
 }
 
@@ -817,12 +889,12 @@ fn can_join_attachments(schema: &SqliteSchema) -> bool {
         && schema.has_column("message_attachment_join", "attachment_id")
 }
 
-fn source_json(evidence: &SqliteEvidence, table: &str, rowid: i64) -> Value {
+fn source_json(cfg: &MessagesConfig, evidence: &SqliteEvidence, table: &str, rowid: i64) -> Value {
     json!({
         "path": evidence.source_label(),
         "table": table,
         "rowid": rowid,
-        "schema_variant": SCHEMA_VARIANT,
+        "schema_variant": cfg.schema_variant,
         "parser_confidence": "compatible_schema",
         "copied_sidecars": evidence.copied_sidecars(),
         "files": evidence
@@ -993,7 +1065,16 @@ mod tests {
         assert_eq!(objects[2].kind, "mobile.communication.attachment");
         assert_eq!(objects[0].json["participants"][0]["id"], "+15551234567");
         assert_eq!(objects[1].json["direction"], "outgoing");
-        assert_eq!(objects[1].json["message"]["display_text"], "hello");
+        // Canonical envelope: body at the top level, app-specific under details.
+        assert_eq!(objects[1].json["schema"], "chat.v1");
+        assert_eq!(objects[1].json["body"], "hello");
+        assert_eq!(objects[1].json["app"]["label"], "iMessage");
+        assert_eq!(objects[1].json["conversation"]["id"], "1");
+        assert_eq!(objects[1].json["sender"]["is_self"], true);
+        assert_eq!(
+            objects[1].json["details"]["message"]["display_text"],
+            "hello"
+        );
         assert_eq!(
             objects[1].json["timestamps"]["message"]["rfc3339"],
             "2001-01-01T00:00:01+00:00"

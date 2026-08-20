@@ -24,6 +24,18 @@ pub trait Parser: Send + Sync {
         &[]
     }
 
+    /// Whether this parser needs provenance for its primary source even when it
+    /// has no companion files.
+    ///
+    /// The indexer normally streams standalone files through
+    /// `ParserInput::ReadSeek`. Parsers that infer meaning from the indexed
+    /// path (for example LaunchAgent vs LaunchDaemon, or the SharedFileList
+    /// name) opt in here so the indexer supplies an empty
+    /// `ParserInput::Compound` carrying the primary source metadata.
+    fn requires_source_metadata(&self) -> bool {
+        false
+    }
+
     /// Extract zero or more timeline events from a parsed object for the supertimeline.
     ///
     /// The default implementation returns an empty vector. Parsers with temporal

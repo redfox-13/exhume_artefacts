@@ -41,6 +41,26 @@ pub(crate) fn apple_nanoseconds_to_json(value: Option<i64>) -> Value {
     }
 }
 
+/// Epoch **milliseconds** (Android stores SMS/MMS dates this way).
+pub(crate) fn unix_millis_to_json(value: Option<i64>) -> Value {
+    match value {
+        Some(unix_ms) if unix_ms > 0 => {
+            let seconds = unix_ms.div_euclid(1_000);
+            let millis = unix_ms.rem_euclid(1_000) as u32;
+            let rfc3339 = DateTime::<Utc>::from_timestamp(seconds, millis * 1_000_000)
+                .map(|dt| dt.to_rfc3339());
+
+            json!({
+                "original": value,
+                "original_epoch": "unix_milliseconds",
+                "unix_ms": unix_ms,
+                "rfc3339": rfc3339,
+            })
+        }
+        _ => Value::Null,
+    }
+}
+
 pub(crate) fn unix_seconds_to_json(value: Option<i64>) -> Value {
     match value {
         Some(seconds) if seconds > 0 => {

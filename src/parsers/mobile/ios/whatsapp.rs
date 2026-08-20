@@ -1,4 +1,7 @@
 use crate::core::{CompanionSpec, ObjectParsed, Parser, ParserInput, TimelineEvent};
+use crate::parsers::mobile::common::records::{
+    AppInfo, ChatMessage, Conversation, Direction, MessageState, Party,
+};
 use crate::parsers::mobile::common::timestamps::apple_absolute_to_json;
 use crate::parsers::mobile::sqlite::{
     SqliteConnection, SqliteEvidence, SqliteSchema, SqliteStatement, select_column,
@@ -8,11 +11,92 @@ use base64::Engine;
 use serde_json::{Value, json};
 
 const PARSER_NAME: &str = "mobile_ios_whatsapp";
+const APP: AppInfo = AppInfo {
+    bundle_id: "net.whatsapp.WhatsApp",
+    label: "WhatsApp",
+};
 const SCHEMA_VARIANT: &str = "ios_whatsapp_chatstorage_coredata_v1";
 const SQLITE_COMPANIONS: &[CompanionSpec] = &[
     CompanionSpec::optional_suffix("sqlite_wal", "-wal"),
     CompanionSpec::optional_suffix("sqlite_shm", "-shm"),
 ];
+
+/// Per-platform differences between the iOS and macOS WhatsApp parsers. Both
+/// read `ChatStorage.sqlite` with the identical Core Data schema, so the macOS
+/// parser reuses this whole engine with only these fields changed.
+pub(crate) struct WhatsAppConfig {
+    pub parser_name: &'static str,
+    /// `"ios"` or `"macos"` — recorded on every emitted object.
+    pub platform: &'static str,
+    /// Short app label used in the app-specific JSON blocks.
+    pub app_label: &'static str,
+    pub app: AppInfo,
+    pub schema_variant: &'static str,
+}
+
+const IOS_CONFIG: WhatsAppConfig = WhatsAppConfig {
+    parser_name: PARSER_NAME,
+    platform: "ios",
+    app_label: "whatsapp",
+    app: APP,
+    schema_variant: SCHEMA_VARIANT,
+};
+
+/// Run the WhatsApp ChatStorage engine end-to-end for either platform.
+pub(crate) fn run_whatsapp(
+    cfg: &WhatsAppConfig,
+    input: ParserInput,
+    sink: &mut dyn FnMut(ObjectParsed) -> Result<()>,
+) -> Result<()> {
+    let evidence = SqliteEvidence::from_input(input, "ChatStorage.sqlite")?;
+    let conn = SqliteConnection::open(evidence.path())?;
+    let schema = conn.schema()?;
+    validate_schema(&schema)?;
+
+    emit_chats(cfg, &conn, &schema, &evidence, sink)?;
+    emit_messages(cfg, &conn, &schema, &evidence, sink)?;
+
+    Ok(())
+}
+
+/// Timeline extraction is identical for both platforms.
+pub(crate) fn extract_whatsapp_timeline(obj: &ObjectParsed) -> Vec<TimelineEvent> {
+    match obj.kind {
+        "mobile.communication.message" => {
+            let Some(ts_unix_ms) = obj.json["timestamps"]["message"]["unix_ms"].as_i64() else {
+                return Vec::new();
+            };
+            let description = obj.json["details"]["message"]["display_text"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned);
+            let actor = obj.json["sender"]["id"].as_str().map(str::to_owned);
+            vec![TimelineEvent {
+                ts_unix_ms,
+                event_type: "mobile.communication.message",
+                description,
+                actor,
+            }]
+        }
+        "mobile.communication.attachment" => {
+            let Some(ts_unix_ms) = obj.json["timestamps"]["message"]["unix_ms"].as_i64() else {
+                return Vec::new();
+            };
+            let description = obj.json["attachment"]["file_name"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .or_else(|| obj.json["attachment"]["kind"].as_str())
+                .map(str::to_owned);
+            vec![TimelineEvent {
+                ts_unix_ms,
+                event_type: "mobile.communication.attachment",
+                description,
+                actor: None,
+            }]
+        }
+        _ => Vec::new(),
+    }
+}
 
 #[derive(Default)]
 pub struct IosWhatsAppParser;
@@ -31,41 +115,7 @@ impl Parser for IosWhatsAppParser {
     }
 
     fn extract_timeline_events(&self, obj: &ObjectParsed) -> Vec<TimelineEvent> {
-        match obj.kind {
-            "mobile.communication.message" => {
-                let Some(ts_unix_ms) = obj.json["timestamps"]["message"]["unix_ms"].as_i64() else {
-                    return Vec::new();
-                };
-                let description = obj.json["message"]["display_text"]
-                    .as_str()
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_owned);
-                let actor = obj.json["sender"]["jid"].as_str().map(str::to_owned);
-                vec![TimelineEvent {
-                    ts_unix_ms,
-                    event_type: "mobile.communication.message",
-                    description,
-                    actor,
-                }]
-            }
-            "mobile.communication.attachment" => {
-                let Some(ts_unix_ms) = obj.json["timestamps"]["message"]["unix_ms"].as_i64() else {
-                    return Vec::new();
-                };
-                let description = obj.json["attachment"]["file_name"]
-                    .as_str()
-                    .filter(|s| !s.is_empty())
-                    .or_else(|| obj.json["attachment"]["kind"].as_str())
-                    .map(str::to_owned);
-                vec![TimelineEvent {
-                    ts_unix_ms,
-                    event_type: "mobile.communication.attachment",
-                    description,
-                    actor: None,
-                }]
-            }
-            _ => Vec::new(),
-        }
+        extract_whatsapp_timeline(obj)
     }
 
     fn run_into(
@@ -73,15 +123,7 @@ impl Parser for IosWhatsAppParser {
         input: ParserInput,
         sink: &mut dyn FnMut(ObjectParsed) -> Result<()>,
     ) -> Result<()> {
-        let evidence = SqliteEvidence::from_input(input, "ChatStorage.sqlite")?;
-        let conn = SqliteConnection::open(evidence.path())?;
-        let schema = conn.schema()?;
-        validate_schema(&schema)?;
-
-        emit_chats(&conn, &schema, &evidence, sink)?;
-        emit_messages(&conn, &schema, &evidence, sink)?;
-
-        Ok(())
+        run_whatsapp(&IOS_CONFIG, input, sink)
     }
 }
 
@@ -113,6 +155,7 @@ fn validate_schema(schema: &SqliteSchema) -> Result<()> {
 }
 
 fn emit_chats(
+    cfg: &WhatsAppConfig,
     conn: &SqliteConnection,
     schema: &SqliteSchema,
     evidence: &SqliteEvidence,
@@ -197,10 +240,10 @@ fn emit_chats(
         let chat_pk = row.i64(0).context("chat row missing Z_PK")?;
         let last_message_text = row.text(10);
         let json = json!({
-            "platform": "ios",
-            "app": "whatsapp",
+            "platform": cfg.platform,
+            "app": cfg.app_label,
             "record_type": "chat",
-            "source": source_json(evidence, "ZWACHATSESSION", chat_pk),
+            "source": source_json(cfg, evidence, "ZWACHATSESSION", chat_pk),
             "chat": {
                 "rowid": chat_pk,
                 "jid": row.text(1),
@@ -219,7 +262,7 @@ fn emit_chats(
         });
 
         sink(ObjectParsed {
-            parser: PARSER_NAME,
+            parser: cfg.parser_name,
             kind: "mobile.communication.chat",
             text: row.text(3).unwrap_or_default(),
             json,
@@ -228,6 +271,7 @@ fn emit_chats(
 }
 
 fn emit_messages(
+    cfg: &WhatsAppConfig,
     conn: &SqliteConnection,
     schema: &SqliteSchema,
     evidence: &SqliteEvidence,
@@ -488,7 +532,7 @@ fn emit_messages(
         ),
     );
 
-    conn.query_rows(&sql, |row| emit_message(row, evidence, sink))
+    conn.query_rows(&sql, |row| emit_message(cfg, row, evidence, sink))
 }
 
 fn media_join(schema: &SqliteSchema) -> (&'static str, bool) {
@@ -512,6 +556,7 @@ fn media_join(schema: &SqliteSchema) -> (&'static str, bool) {
 }
 
 fn emit_message(
+    cfg: &WhatsAppConfig,
     row: &SqliteStatement<'_>,
     evidence: &SqliteEvidence,
     sink: &mut dyn FnMut(ObjectParsed) -> Result<()>,
@@ -522,59 +567,92 @@ fn emit_message(
     let media = media_json(row);
     let classification = classify_message(row, text.as_deref(), media.is_object());
 
-    let json = json!({
-        "platform": "ios",
-        "app": "whatsapp",
-        "record_type": "message",
-        "source": source_json(evidence, "ZWAMESSAGE", message_pk),
-        "timestamps": {
-            "message": apple_absolute_to_json(row.f64(8)),
-            "sent": apple_absolute_to_json(row.f64(9)),
-        },
-        "direction": direction_label(is_from_me),
-        "message": {
-            "rowid": message_pk,
-            "stanza_id": row.text(1),
-            "text": text.clone(),
-            "display_text": classification.display_text.clone(),
-            "type_code": row.i64(4),
-            "type_family": classification.type_family,
-            "status_code": row.i64(5),
-            "error_status_code": row.i64(6),
-            "starred": row.bool(7),
-        },
-        "chat": {
-            "rowid": row.i64(13),
-            "jid": row.text(14),
-            "name": row.text(15),
-            "session_type_code": row.i64(16),
-        },
-        "sender": {
-            "jid": row.text(10).or_else(|| row.text(17)),
-            "push_name": row.text(12),
-            "group_member_jid": row.text(17),
-            "group_member_name": row.text(18),
-        },
-        "recipient": {
-            "jid": row.text(11),
-        },
-        "media": media,
-        "raw": {
-            "flags": row.i64(34),
-            "sort": row.i64(35),
-            "doc_id": row.i64(36),
-        },
-    });
+    let chat_id = row
+        .i64(13)
+        .map(|id| id.to_string())
+        .or_else(|| row.text(14))
+        .unwrap_or_else(|| "unknown".to_string());
+    let counterpart_jid = row.text(10).or_else(|| row.text(17));
 
-    sink(ObjectParsed {
-        parser: PARSER_NAME,
-        kind: "mobile.communication.message",
-        text: text.clone().unwrap_or_default(),
-        json,
-    })?;
+    let message = ChatMessage {
+        parser: cfg.parser_name,
+        platform: cfg.platform,
+        app: cfg.app,
+        conversation: Conversation {
+            id: chat_id,
+            display_name: row.text(15).or_else(|| row.text(14)),
+            participants: counterpart_jid
+                .clone()
+                .map(|jid| {
+                    vec![Party {
+                        id: Some(jid),
+                        display_name: row.text(12).or_else(|| row.text(18)),
+                        is_self: false,
+                    }]
+                })
+                .unwrap_or_default(),
+        },
+        direction: Direction::from_is_from_me(is_from_me),
+        sender: if is_from_me == Some(true) {
+            Party {
+                id: None,
+                display_name: None,
+                is_self: true,
+            }
+        } else {
+            Party {
+                id: counterpart_jid,
+                display_name: row.text(12).or_else(|| row.text(18)),
+                is_self: false,
+            }
+        },
+        timestamp: apple_absolute_to_json(row.f64(8)),
+        sent: apple_absolute_to_json(row.f64(9)),
+        received: Value::Null,
+        body: text.clone(),
+        // WhatsApp media is emitted as its own attachment record; the inline
+        // list stays empty so the two never double-count.
+        attachments: Vec::new(),
+        state: MessageState::default(),
+        source: source_json(cfg, evidence, "ZWAMESSAGE", message_pk),
+        details: json!({
+            "message": {
+                "rowid": message_pk,
+                "stanza_id": row.text(1),
+                "display_text": classification.display_text.clone(),
+                "type_code": row.i64(4),
+                "type_family": classification.type_family,
+                "status_code": row.i64(5),
+                "error_status_code": row.i64(6),
+                "starred": row.bool(7),
+                "has_media": media.is_object(),
+            },
+            "chat": {
+                "rowid": row.i64(13),
+                "jid": row.text(14),
+                "name": row.text(15),
+                "session_type_code": row.i64(16),
+            },
+            "sender": {
+                "push_name": row.text(12),
+                "group_member_jid": row.text(17),
+                "group_member_name": row.text(18),
+            },
+            "recipient": { "jid": row.text(11) },
+            "media": media,
+            "raw": {
+                "flags": row.i64(34),
+                "sort": row.i64(35),
+                "doc_id": row.i64(36),
+            },
+        }),
+    };
+
+    sink(message.into())?;
 
     if classification.emit_attachment {
         emit_attachment(
+            cfg,
             row,
             evidence,
             message_pk,
@@ -589,6 +667,7 @@ fn emit_message(
 }
 
 fn emit_attachment(
+    cfg: &WhatsAppConfig,
     row: &SqliteStatement<'_>,
     evidence: &SqliteEvidence,
     message_pk: i64,
@@ -628,10 +707,10 @@ fn emit_attachment(
         .unwrap_or_default();
 
     let json = json!({
-        "platform": "ios",
-        "app": "whatsapp",
+        "platform": cfg.platform,
+        "app": cfg.app_label,
         "record_type": "attachment",
-        "source": source_json(evidence, "ZWAMEDIAITEM", media_pk),
+        "source": source_json(cfg, evidence, "ZWAMEDIAITEM", media_pk),
         "timestamps": {
             "message": apple_absolute_to_json(row.f64(8)),
             "sent": apple_absolute_to_json(row.f64(9)),
@@ -672,7 +751,7 @@ fn emit_attachment(
     });
 
     sink(ObjectParsed {
-        parser: PARSER_NAME,
+        parser: cfg.parser_name,
         kind: "mobile.communication.attachment",
         text,
         json,
@@ -1022,12 +1101,12 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
-fn source_json(evidence: &SqliteEvidence, table: &str, rowid: i64) -> Value {
+fn source_json(cfg: &WhatsAppConfig, evidence: &SqliteEvidence, table: &str, rowid: i64) -> Value {
     json!({
         "path": evidence.source_label(),
         "table": table,
         "rowid": rowid,
-        "schema_variant": SCHEMA_VARIANT,
+        "schema_variant": cfg.schema_variant,
         "parser_confidence": "compatible_schema",
         "copied_sidecars": evidence.copied_sidecars(),
         "files": evidence
@@ -1193,21 +1272,23 @@ mod tests {
         assert_eq!(objects[2].kind, "mobile.communication.attachment");
         assert_eq!(objects[3].kind, "mobile.communication.message");
         assert_eq!(objects[1].json["direction"], "outgoing");
-        assert_eq!(objects[1].json["message"]["stanza_id"], "ABC123");
+        assert_eq!(objects[1].json["schema"], "chat.v1");
+        assert_eq!(objects[1].json["app"]["label"], "WhatsApp");
+        assert_eq!(objects[1].json["body"], "hello");
+        assert_eq!(objects[1].json["details"]["message"]["stanza_id"], "ABC123");
         assert_eq!(
             objects[1].json["timestamps"]["message"]["rfc3339"],
             "2001-01-01T00:00:00+00:00"
         );
-        assert_eq!(objects[1].json["media"]["file_size"], 1234);
-        assert_eq!(objects[1].json["message"]["display_text"], "hello");
+        assert_eq!(objects[1].json["details"]["media"]["file_size"], 1234);
         assert_eq!(objects[2].json["attachment"]["kind"], "image");
         assert_eq!(
             objects[2].json["attachment"]["local_path"],
             "Message/Media/example.jpg"
         );
         assert_eq!(objects[2].json["message"]["rowid"], 10);
-        assert_eq!(objects[3].json["message"]["type_family"], "text");
-        assert_eq!(objects[3].json["message"]["display_text"], "plain text");
+        assert_eq!(objects[3].json["details"]["message"]["type_family"], "text");
+        assert_eq!(objects[3].json["body"], "plain text");
 
         Ok(())
     }

@@ -1,4 +1,5 @@
 pub mod evtx;
+pub mod macos;
 pub mod mobile;
 pub mod pe;
 pub mod pml;
@@ -91,8 +92,73 @@ pub fn build_registry() -> ParserRegistry {
     );
 
     m.insert(
+        "mobile_android_sms",
+        Arc::new(mobile::AndroidSmsParser) as Arc<dyn Parser>,
+    );
+
+    m.insert(
         "mobile_ios_notes",
         Arc::new(mobile::IosNotesParser) as Arc<dyn Parser>,
+    );
+
+    m.insert(
+        "macos_safari",
+        Arc::new(macos::MacosSafariParser) as Arc<dyn Parser>,
+    );
+
+    m.insert(
+        "macos_chromium",
+        Arc::new(macos::MacosChromiumParser) as Arc<dyn Parser>,
+    );
+
+    m.insert(
+        "macos_firefox",
+        Arc::new(macos::MacosFirefoxParser) as Arc<dyn Parser>,
+    );
+
+    m.insert(
+        "macos_imessage",
+        Arc::new(macos::MacosIMessageParser) as Arc<dyn Parser>,
+    );
+
+    m.insert(
+        "macos_whatsapp",
+        Arc::new(macos::MacosWhatsAppParser) as Arc<dyn Parser>,
+    );
+
+    m.insert(
+        "macos_sharedfilelist",
+        Arc::new(macos::MacosSharedFileListParser) as Arc<dyn Parser>,
+    );
+
+    m.insert(
+        "macos_keychain",
+        Arc::new(macos::MacosKeychainParser) as Arc<dyn Parser>,
+    );
+
+    m.insert(
+        "macos_quarantine",
+        Arc::new(macos::MacosQuarantineParser) as Arc<dyn Parser>,
+    );
+
+    m.insert(
+        "macos_launchd",
+        Arc::new(macos::MacosLaunchdParser) as Arc<dyn Parser>,
+    );
+
+    m.insert(
+        "macos_loginwindow",
+        Arc::new(macos::MacosLoginwindowParser) as Arc<dyn Parser>,
+    );
+
+    m.insert(
+        "macos_network",
+        Arc::new(macos::MacosNetworkParser) as Arc<dyn Parser>,
+    );
+
+    m.insert(
+        "macos_spotlight",
+        Arc::new(macos::MacosSpotlightParser) as Arc<dyn Parser>,
     );
 
     m
