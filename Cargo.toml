@@ -1,13 +1,13 @@
 [package]
 name = "exhume_artefacts"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 description = "Digital forensics artefact parser library and CLI for Exhume."
 repository = "https://github.com/forensicxlab/exhume_artefacts"
 documentation = "https://www.forensicxlab.com/docs/category/exhume---artefacts"
 readme = "README.md"
 authors = ["k1nd0ne"]
-license = "GPL-2.0-or-later"
+license = "GPL-3.0-only"
 keywords = ["forensics", "dfir", "artefacts", "parsers", "exhume"]
 
 [dependencies]
@@ -24,10 +24,10 @@ hex = "0.4"
 libsqlite3-sys = "0.30.1"
 plist = "1.7"
 scroll = "0.12"
-exhume_filesystem = "=0.5.3"
+exhume_filesystem = "=0.5.4"
 log = "0.4.25"
 clap = { version = "4.5", features = ["cargo"] }
 clap-num = "1.1.1"
 env_logger = "0.11.6"
-exhume_body = "=0.5.6"
+exhume_body = "=0.5.7"
 tempfile = "3.26.0"

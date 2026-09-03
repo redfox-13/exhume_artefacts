@@ -4,6 +4,10 @@ pub(crate) mod ios;
 pub(crate) mod sqlite;
 
 pub use android::sms::AndroidSmsParser;
+pub use ios::applications::{
+    IosAppContainerParser, IosAppManifestParser, IosFrontboardParser, IosIconStateParser,
+    IosMobileInstallationLogParser,
+};
 pub use ios::calendar::IosCalendarParser;
 pub use ios::callhistory::IosCallHistoryParser;
 pub use ios::contacts::IosContactsParser;

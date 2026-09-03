@@ -102,6 +102,31 @@ pub fn build_registry() -> ParserRegistry {
     );
 
     m.insert(
+        "mobile_ios_app_manifest",
+        Arc::new(mobile::IosAppManifestParser) as Arc<dyn Parser>,
+    );
+
+    m.insert(
+        "mobile_ios_app_container",
+        Arc::new(mobile::IosAppContainerParser) as Arc<dyn Parser>,
+    );
+
+    m.insert(
+        "mobile_ios_frontboard",
+        Arc::new(mobile::IosFrontboardParser) as Arc<dyn Parser>,
+    );
+
+    m.insert(
+        "mobile_ios_iconstate",
+        Arc::new(mobile::IosIconStateParser) as Arc<dyn Parser>,
+    );
+
+    m.insert(
+        "mobile_ios_mobileinstallation_log",
+        Arc::new(mobile::IosMobileInstallationLogParser) as Arc<dyn Parser>,
+    );
+
+    m.insert(
         "macos_safari",
         Arc::new(macos::MacosSafariParser) as Arc<dyn Parser>,
     );
@@ -159,6 +184,26 @@ pub fn build_registry() -> ParserRegistry {
     m.insert(
         "macos_spotlight",
         Arc::new(macos::MacosSpotlightParser) as Arc<dyn Parser>,
+    );
+
+    m.insert(
+        "macos_app_bundle",
+        Arc::new(macos::MacosAppBundleParser) as Arc<dyn Parser>,
+    );
+
+    m.insert(
+        "macos_install_history",
+        Arc::new(macos::MacosInstallHistoryParser) as Arc<dyn Parser>,
+    );
+
+    m.insert(
+        "macos_package_receipt",
+        Arc::new(macos::MacosPackageReceiptParser) as Arc<dyn Parser>,
+    );
+
+    m.insert(
+        "macos_container_registration",
+        Arc::new(macos::MacosContainerRegistrationParser) as Arc<dyn Parser>,
     );
 
     m

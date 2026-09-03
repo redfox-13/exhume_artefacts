@@ -1,5 +1,6 @@
 pub(crate) mod common;
 
+pub(crate) mod applications;
 pub(crate) mod chromium;
 pub(crate) mod firefox;
 pub(crate) mod imessage;
@@ -13,6 +14,10 @@ pub(crate) mod sharedfilelist;
 pub(crate) mod spotlight;
 pub(crate) mod whatsapp;
 
+pub use applications::{
+    MacosAppBundleParser, MacosContainerRegistrationParser, MacosInstallHistoryParser,
+    MacosPackageReceiptParser,
+};
 pub use chromium::MacosChromiumParser;
 pub use firefox::MacosFirefoxParser;
 pub use imessage::MacosIMessageParser;

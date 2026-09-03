@@ -1,3 +1,4 @@
+pub(crate) mod applications;
 pub(crate) mod calendar;
 pub(crate) mod callhistory;
 pub(crate) mod contacts;
