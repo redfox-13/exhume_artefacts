@@ -1,4 +1,5 @@
 pub mod evtx;
+pub mod windows;
 pub mod macos;
 pub mod mobile;
 pub mod pe;
@@ -24,6 +25,11 @@ pub fn build_registry() -> ParserRegistry {
     m.insert(
         "windows_pml",
         Arc::new(pml::WindowsPmlParser) as Arc<dyn Parser>,
+    );
+
+    m.insert(
+        "windows_hive",
+        Arc::new(windows::hive::WindowsHiveParser::default()) as Arc<dyn Parser>,
     );
 
     m.insert(
