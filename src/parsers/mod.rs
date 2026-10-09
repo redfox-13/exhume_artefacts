@@ -1,9 +1,6 @@
-pub mod evtx;
 pub mod windows;
 pub mod macos;
 pub mod mobile;
-pub mod pe;
-pub mod pml;
 use crate::core::Parser;
 use std::{collections::HashMap, sync::Arc};
 
@@ -14,17 +11,17 @@ pub fn build_registry() -> ParserRegistry {
 
     m.insert(
         "windows_evtx",
-        Arc::new(evtx::WindowsEvtxParser::default()) as Arc<dyn Parser>,
+        Arc::new(windows::evtx::WindowsEvtxParser::default()) as Arc<dyn Parser>,
     );
 
     m.insert(
         "windows_pe",
-        Arc::new(pe::WindowsPeParser::default()) as Arc<dyn Parser>,
+        Arc::new(windows::pe::WindowsPeParser::default()) as Arc<dyn Parser>,
     );
 
     m.insert(
         "windows_pml",
-        Arc::new(pml::WindowsPmlParser) as Arc<dyn Parser>,
+        Arc::new(windows::pml::WindowsPmlParser) as Arc<dyn Parser>,
     );
 
     m.insert(
