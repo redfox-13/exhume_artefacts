@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
-use notatin::cell::CellState;
+use notatin::cell::{Cell, CellState};
 use notatin::parser::{Parser as HiveParser, ParserIterator};
 use notatin::parser_builder::ParserBuilder;
 use serde_json::json;
 use std::io::{Cursor, Seek, SeekFrom};
+use std::path::PathBuf;
 
 use crate::TimelineEvent;
 use crate::core::{CompanionSpec, ObjectParsed, Parser, ParserInput};
@@ -39,13 +40,6 @@ impl WindowsHiveParser {
             let ts_unix_ms: i64 = filetime.timestamp_millis();
             let ts_rfc3339 = filetime.to_rfc3339();
 
-            let is_key_deleted = match cell.cell_state {
-                CellState::Allocated | CellState::ModifiedTransactionLog => false,
-                CellState::DeletedPrimaryFile
-                | CellState::DeletedPrimaryFileSlack
-                | CellState::DeletedTransactionLog => true,
-            };
-
             let key_state = match cell.cell_state {
                 CellState::Allocated => "live",
                 CellState::ModifiedTransactionLog => "live_modified_by_log",
@@ -53,6 +47,23 @@ impl WindowsHiveParser {
                 CellState::DeletedPrimaryFileSlack => "deleted_slack",
                 CellState::DeletedTransactionLog => "deleted_in_log",
             };
+
+            let values: Vec<_> = cell
+                .value_iter()
+                .map(|cell_value| {
+                    let (value, _) = cell_value.get_content();
+
+                    json!({
+                        "value_name": cell_value.detail.value_name(),
+                        "data_type": value.get_type(),
+                        "data_length": cell_value.detail.size().abs(),
+                        "value_decoded": value.to_string(),
+                        "value_raw_hex": hex::encode(cell_value.detail.value_bytes().unwrap_or_default()),
+                        "data_offset": cell_value.data_offsets_absolute,
+                        "slack": hex::encode(cell_value.detail.slack()),
+                    })
+                })
+                .collect();
 
             sink(ObjectParsed {
                 parser: self.name(),
@@ -63,45 +74,20 @@ impl WindowsHiveParser {
                 ),
                 json: json!({
                     "key_name": cell.key_name,
-                    "key_path": cell.path,
-                    "key_hash": cell.hash.map(|hash| hash.to_hex().to_string()),
+                    "full_path": cell.path,
+                    "signature": cell.detail.signature(),
+                    "last_writen_timestamp": ts_rfc3339,
+                    "last_writen_timestamp_unix": ts_unix,
+                    "last_writen_timestamp_unix_ms": ts_unix_ms,
+                    "is_recovered": cell.has_or_is_recovered(),
                     "key_state": key_state,
-                    "number_of_values": cell.detail.number_of_key_values(),
-                    "is_key_deleted": is_key_deleted,
-                    "size": cell.detail.size(),
-                    "absolute_offset": cell.file_offset_absolute,
-                    "timestamp": ts_rfc3339,
-                    "timestamp_unix": ts_unix,
-                    "timestamp_unix_ms": ts_unix_ms,
+                    "size": cell.detail.size().abs(),
+                    "subkeys_count": cell.detail.number_of_sub_keys(),
+                    "values_count": cell.detail.number_of_key_values(),
+                    "values": values,
+                    "slack": hex::encode(cell.detail.slack()),
                 }),
             })?;
-
-            for cell_value in cell.value_iter() {
-                let (value, _) = cell_value.get_content();
-                let value_string = value.to_string();
-
-                sink(ObjectParsed {
-                    parser: self.name(),
-                    kind: "windows.hive.value",
-                    text: format!(
-                        "[KEY {}][VALUE {} TYPE {}] {}",
-                        cell.key_name,
-                        cell_value.detail.value_name(),
-                        value.get_type(),
-                        value_string,
-                    ),
-                    json: json!({
-                        "value_name": cell_value.detail.value_name(),
-                        "value_type": cell_value.data_type,
-                        "value_decoded": value_string,
-                        "value_hash": cell_value.hash.map(|hash| hash.to_hex().to_string()),
-                        "parent_key": cell.path,
-                        "timestamp": ts_rfc3339,
-                        "timestamp_unix": ts_unix,
-                        "timestamp_unix_ms": ts_unix_ms,
-                    }),
-                })?;
-            }
         }
 
         Ok(())
@@ -125,7 +111,7 @@ impl Parser for WindowsHiveParser {
         let Some(ts_unix_ms) = _obj.json["timestamp_unix_ms"].as_i64() else {
             return Vec::new();
         };
-        
+
         let description = match _obj.kind {
             "windows.hive.key" => {
                 let key_name = _obj.json["key_name"].as_str().unwrap_or_default();
@@ -133,14 +119,17 @@ impl Parser for WindowsHiveParser {
                 let key_state = _obj.json["key_state"].as_str().unwrap_or_default();
 
                 Some(format!("[KEY {}] {} ({})", key_name, key_path, key_state))
-            },
+            }
             "windows.hive.value" => {
                 let value_name = _obj.json["value_name"].as_str().unwrap_or_default();
                 let value_type = _obj.json["value_type"].as_str().unwrap_or_default();
                 let value_decoded = _obj.json["value_decoded"].as_str().unwrap_or_default();
 
-                Some(format!("[KEY VALUE {}] {} ({})", value_name, value_decoded, value_type))
-            },
+                Some(format!(
+                    "[KEY VALUE {}] {} ({})",
+                    value_name, value_decoded, value_type
+                ))
+            }
             _ => Option::None,
         };
 
@@ -159,13 +148,28 @@ impl Parser for WindowsHiveParser {
     ) -> Result<()> {
         match input {
             ParserInput::Path(path_buf) => {
+                let companion_paths = path_buf.parent().map(|parent_path| {
+                    HIVE_COMPANIONS
+                        .iter()
+                        .map(|companion| {
+                            parent_path.join(hive_suffix_for_role(companion.role).unwrap())
+                        })
+                        .collect::<PathBuf>()
+                });
+
                 let mut parser_builder = ParserBuilder::from_path(path_buf);
                 parser_builder.recover_deleted(self.recover_cells);
+
+                if let Some(companion_path) = companion_paths {
+                    if companion_path.exists() {
+                        parser_builder.with_transaction_log(companion_path);
+                    }
+                }
 
                 self.run_with_parser(
                     parser_builder
                         .build()
-                        .context("Failed to open Hive from Compound")?,
+                        .context("Failed to open Hive from Path")?,
                     sink,
                 )
             }
@@ -187,7 +191,7 @@ impl Parser for WindowsHiveParser {
                     .context("Failed to copy Hive stream to temporary file")?;
 
                 hive_file.seek(SeekFrom::Start(0))?;
-                
+
                 let mut parser_builder = ParserBuilder::from_file(hive_file);
                 parser_builder.recover_deleted(self.recover_cells);
 
