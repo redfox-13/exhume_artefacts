@@ -64,10 +64,197 @@ where
     cell.value_iter().filter_map(|v| format(&v)).collect()
 }
 
+fn parse_time(cell: &CellKeyNode) -> (i64, i64, String) {
+    let filetime = cell.last_key_written_date_and_time();
+
+    (filetime.timestamp(), filetime.timestamp_millis(), filetime.to_rfc3339())
+}
+
 use TrieNode as T;
 
 static ARTEFACTS: LazyLock<TrieNode> = LazyLock::new(|| {
-    T::any().sub(vec![])
+    T::lit("").sub(vec![
+        // --- SOFTWARE ---
+        T::lit("Microsoft").sub(vec![
+            T::lit("Windows").sub(vec![
+                T::lit("CurrentVersion").sub(vec![
+                    T::lit("Run").emit(|parser, cell| {
+                        let (ts_unix, ts_unix_ms, ts_rfc3339) = parse_time(cell);
+                        
+                        let programs: Vec<Value> = parse_values(cell, |value| {
+                            Some(json!({
+                                "program_name": value.get_pretty_name(),
+                                "command": value.get_content().0.to_string(),
+                            }))
+                        });                      
+
+                        Some(ObjectParsed {
+                            parser: parser,
+                            kind: "windows.hive.autorun.system",
+                            text: format!(
+                                "PERSISTENT PROGRAMS (AUTO RUN): {}",
+                                programs.iter().map(|value| value["program_name"].as_str().unwrap_or(""))
+                                .collect::<Vec<&str>>().join(", ")
+                            ),
+                            json: json!({
+                                "registry_path": cell.path,
+                                "last_write_timestamp": ts_rfc3339,
+                                "last_write_timestamp_unix": ts_unix,
+                                "last_write_timestamp_unix_ms": ts_unix_ms,
+                                "system_run_programs": programs,
+                            }),
+                        })
+                    }),
+                    T::lit("RunOnce").emit(|parser, cell| {
+                        let (ts_unix, ts_unix_ms, ts_rfc3339) = parse_time(cell);
+
+                        let programs: Vec<Value> = parse_values(cell, |value| {
+                            Some(json!({
+                                "program_name": value.get_pretty_name(),
+                                "command": value.get_content().0.to_string(),
+                            }))
+                        });
+
+                        Some(ObjectParsed {
+                            parser: parser,
+                            kind: "windows.hive.autorun.system",
+                            text: format!(
+                                "PERSISTENT PROGRAMS (AUTO RUN ONCE): {}",
+                                programs.iter().map(|value| value["program_name"].as_str().unwrap_or(""))
+                                .collect::<Vec<&str>>().join(", ")
+                            ),
+                            json: json!({
+                                "registry_path": cell.path,
+                                "last_write_timestamp": ts_rfc3339,
+                                "last_write_timestamp_unix": ts_unix,
+                                "last_write_timestamp_unix_ms": ts_unix_ms,
+                                "system_run_once_programs": programs,
+                            }),
+                        })
+                    }),
+                    T::lit("RunServices").emit(|parser, cell| {
+                        let (ts_unix, ts_unix_ms, ts_rfc3339) = parse_time(cell);
+
+                        let services: Vec<Value> = parse_values(cell, |value| {
+                            Some(json!({
+                                "services_name": value.get_pretty_name(),
+                                "command": value.get_content().0.to_string(),
+                            }))
+                        });
+
+                        Some(ObjectParsed {
+                            parser: parser,
+                            kind: "windows.hive.autorun.system",
+                            text: format!(
+                                "PERSISTENT SERVICES (AUTO RUN): {}",
+                                services.iter().map(|value| value["program_name"].as_str().unwrap_or(""))
+                                .collect::<Vec<&str>>().join(", ")
+                            ),
+                            json: json!({
+                                "registry_path": cell.path,
+                                "last_write_timestamp": ts_rfc3339,
+                                "last_write_timestamp_unix": ts_unix,
+                                "last_write_timestamp_unix_ms": ts_unix_ms,
+                                "system_run_services": services,
+                            }),
+                        })
+                    }),
+                    T::lit("RunServicesOnce").emit(|parser, cell| {
+                        let (ts_unix, ts_unix_ms, ts_rfc3339) = parse_time(cell);
+
+                        let services: Vec<Value> = parse_values(cell, |value| {
+                            Some(json!({
+                                "service_name": value.get_pretty_name(),
+                                "command": value.get_content().0.to_string(),
+                            }))
+                        });
+
+                        Some(ObjectParsed {
+                            parser: parser,
+                            kind: "windows.hive.autorun.system",
+                            text: format!(
+                                "PERSISTENT SERVICES (AUTO RUN ONCE): {}",
+                                services.iter().map(|value| value["program_name"].as_str().unwrap_or(""))
+                                .collect::<Vec<&str>>().join(", ")
+                            ),
+                            json: json!({
+                                "registry_path": cell.path,
+                                "last_write_timestamp": ts_rfc3339,
+                                "last_write_timestamp_unix": ts_unix,
+                                "last_write_timestamp_unix_ms": ts_unix_ms,
+                                "system_run_once_services": services,
+                            }),
+                        })
+                    }),
+                ]),
+            ]),
+        ]),
+
+        
+        // --- NTUSER.DAT ---
+        T::lit("Software").sub(vec![
+            T::lit("Microsoft").sub(vec![
+                T::lit("Windows").sub(vec![
+                    T::lit("CurrentVersion").sub(vec![
+                        T::lit("Run").emit(|parser, cell| {
+                            let (ts_unix, ts_unix_ms, ts_rfc3339) = parse_time(cell);
+                            
+                            let programs: Vec<Value> = parse_values(cell, |value| {
+                                Some(json!({
+                                    "program_name": value.get_pretty_name(),
+                                    "command": value.get_content().0.to_string(),
+                                }))
+                            });                      
+
+                            Some(ObjectParsed {
+                                parser: parser,
+                                kind: "windows.hive.autorun.user",
+                                text: format!(
+                                    "USER PERSISTENT PROGRAMS (USER AUTO RUN): {}",
+                                    programs.iter().map(|value| value["program_name"].as_str().unwrap_or(""))
+                                    .collect::<Vec<&str>>().join(", ")
+                                ),
+                                json: json!({
+                                    "registry_path": cell.path,
+                                    "last_write_timestamp": ts_rfc3339,
+                                    "last_write_timestamp_unix": ts_unix,
+                                    "last_write_timestamp_unix_ms": ts_unix_ms,
+                                    "user_run_programs": programs,
+                                }),
+                            })
+                        }),
+                        T::lit("RunOnce").emit(|parser, cell| {
+                            let (ts_unix, ts_unix_ms, ts_rfc3339) = parse_time(cell);
+
+                            let programs: Vec<Value> = parse_values(cell, |value| {
+                                Some(json!({
+                                    "program_name": value.get_pretty_name(),
+                                    "command": value.get_content().0.to_string(),
+                                }))
+                            });
+
+                            Some(ObjectParsed {
+                                parser: parser,
+                                kind: "windows.hive.autorun.user",
+                                text: format!(
+                                    "USER PERSISTENT PROGRAMS (USER AUTO RUN ONCE): {}",
+                                    programs.iter().map(|value| value["program_name"].as_str().unwrap_or(""))
+                                    .collect::<Vec<&str>>().join(", ")
+                                ),
+                                json: json!({
+                                    "registry_path": cell.path,
+                                    "last_write_timestamp": ts_rfc3339,
+                                    "last_write_timestamp_unix": ts_unix,
+                                    "last_write_timestamp_unix_ms": ts_unix_ms,
+                                    "user_run_once_programs": programs,
+                                }),
+                            })
+                        }),
+                    ]),
+                ]),
+            ]),
+        ]),
+    ])
 });
 
 /// Parser implementation for Windows Hive files.
