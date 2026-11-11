@@ -26,7 +26,7 @@ pub fn build_registry() -> ParserRegistry {
 
     m.insert(
         "windows_hive",
-        Arc::new(windows::hive::WindowsHiveParser::default()) as Arc<dyn Parser>,
+        Arc::new(windows::hive::WindowsHiveParser::default().recover_cells(true)) as Arc<dyn Parser>,
     );
 
     m.insert(
