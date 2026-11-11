@@ -33,3 +33,4 @@ exhume_body = "=0.5.7"
 tempfile = "3.26.0"
 notatin = "1.0.1"
 blake3 = { version = "1", features = ["serde"] }
+regex = "1.13.1"

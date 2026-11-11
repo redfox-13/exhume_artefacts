@@ -1,12 +1,15 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Ok, Result};
 use notatin::cell::{Cell, CellState};
+use notatin::cell_key_node::CellKeyNode;
+use notatin::cell_key_value::CellKeyValue;
 use notatin::parser::{Parser as HiveParser, ParserIterator};
 use notatin::parser_builder::ParserBuilder;
-use serde_json::json;
+use regex::Regex;
+use serde_json::{Value, json};
 use std::io::{Cursor, Seek, SeekFrom};
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
-use crate::TimelineEvent;
 use crate::core::{CompanionSpec, ObjectParsed, Parser, ParserInput};
 
 const HIVE_COMPANIONS: &[CompanionSpec] = &[
@@ -14,6 +17,58 @@ const HIVE_COMPANIONS: &[CompanionSpec] = &[
     CompanionSpec::optional_suffix("hive_log1", ".LOG1"),
     CompanionSpec::optional_suffix("hive_log2", ".LOG2"),
 ];
+
+enum PathSegment {
+    Literal(&'static str),
+    Pattern(Regex),
+    Any,
+}
+
+impl PathSegment {
+    pub fn matches(&self, name: &str) -> bool {
+        match self {
+            PathSegment::Literal(string) => string.eq_ignore_ascii_case(name),
+            PathSegment::Pattern(regex) => regex.is_match(name),
+            PathSegment::Any => true
+        }
+    }
+}
+
+type ArtefactFn = fn(&'static str, &CellKeyNode) -> Option<ObjectParsed>;
+
+struct TrieNode {
+    segment: PathSegment,
+    children: Vec<TrieNode>,
+    outputs: Vec<ArtefactFn>,
+}
+
+impl TrieNode {
+    fn lit(name: &'static str) -> Self {
+        Self { segment: PathSegment::Literal(name), children: vec![], outputs: vec![] }
+    }
+    fn re(pattern: &str) -> Self {
+        Self { segment: PathSegment::Pattern(Regex::new(pattern).unwrap()), children: vec![], outputs: vec![] }
+    }
+    fn any() -> Self {
+        Self { segment: PathSegment::Any, children: vec![], outputs: vec![] }
+    }
+    fn emit(mut self, f: ArtefactFn) -> Self { self.outputs.push(f); self }
+    fn sub(mut self, children: Vec<TrieNode>) -> Self { self.children = children; self }
+}
+
+fn parse_values<F, T, O>(cell: &CellKeyNode, format: F) -> T
+where
+    F: Fn(&CellKeyValue) -> Option<O>,
+    T: FromIterator<O>,
+{
+    cell.value_iter().filter_map(|v| format(&v)).collect()
+}
+
+use TrieNode as T;
+
+static ARTEFACTS: LazyLock<TrieNode> = LazyLock::new(|| {
+    T::any().sub(vec![])
+});
 
 /// Parser implementation for Windows Hive files.
 ///
@@ -23,32 +78,89 @@ const HIVE_COMPANIONS: &[CompanionSpec] = &[
 pub struct WindowsHiveParser {
     //enable recovery of deleted cells
     recover_cells: bool,
+    //only parse known keys with forensic value
+    parse_all_keys: bool,
 }
 
 impl WindowsHiveParser {
     fn run_with_parser(
         &self,
-        parser: HiveParser,
+        parser: &mut HiveParser,
         sink: &mut dyn FnMut(ObjectParsed) -> Result<()>,
     ) -> Result<()> {
-        let parser_iter = ParserIterator::new(&parser);
 
-        for cell in parser_iter {
-            let filetime = cell.last_key_written_date_and_time();
+        if self.parse_all_keys {
+            for cell in ParserIterator::new(&parser) {
+                self.parse_cell_full(cell, sink)?
+            }
+        }
 
-            let ts_unix: i64 = filetime.timestamp();
-            let ts_unix_ms: i64 = filetime.timestamp_millis();
-            let ts_rfc3339 = filetime.to_rfc3339();
+        self.default_parse(parser, sink)
+    }
 
-            let key_state = match cell.cell_state {
-                CellState::Allocated => "live",
-                CellState::ModifiedTransactionLog => "live_modified_by_log",
-                CellState::DeletedPrimaryFile => "deleted_recovered",
-                CellState::DeletedPrimaryFileSlack => "deleted_slack",
-                CellState::DeletedTransactionLog => "deleted_in_log",
-            };
+    fn default_parse(
+        &self,
+        parser: &mut HiveParser,
+        sink: &mut dyn FnMut(ObjectParsed) -> Result<()>
+    ) -> Result<()> {
+        let Some(root_cell) = parser.get_root_key()? else { return Ok(()) };
 
-            let values: Vec<_> = cell
+        let mut seen = std::collections::HashSet::new();
+        let mut candidates: Vec<(CellKeyNode, Vec<&'static TrieNode>)> = vec![(root_cell, vec![&*ARTEFACTS])];
+
+        while let Some((mut parent, nodes)) = candidates.pop() {
+            let mut children = parent.read_sub_keys(parser);
+            children.append(&mut parent.deleted_keys);
+
+            for cell in children {
+                if !seen.insert(cell.file_offset_absolute) { continue; }
+
+                let mut matched: Vec<&'static TrieNode> = Vec::new();
+
+                for node in &nodes {
+                    for child in &node.children {
+                        if !child.segment.matches(&cell.key_name) { continue; }
+
+                        for output in &child.outputs {
+                            if let Some(obj) = output(self.name(), &cell) {
+                                sink(obj)?;
+                            }
+                        }
+                        if !child.children.is_empty() {
+                            matched.push(child);
+                        }
+                    }
+                }
+
+                if !matched.is_empty() {
+                    candidates.push((cell, matched));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn parse_cell_full(
+        &self,
+        cell: CellKeyNode,
+        sink: &mut dyn FnMut(ObjectParsed) -> Result<()>,
+    ) -> Result<()> {
+        let filetime = cell.last_key_written_date_and_time();
+
+        let ts_unix: i64 = filetime.timestamp();
+        let ts_unix_ms: i64 = filetime.timestamp_millis();
+        let ts_rfc3339 = filetime.to_rfc3339();
+
+        let key_state = match cell.cell_state {
+            CellState::Allocated => "live",
+            CellState::ModifiedTransactionLog => "live_modified_by_log",
+            CellState::DeletedPrimaryFile => "deleted_recovered",
+            CellState::DeletedPrimaryFileSlack => "deleted_slack",
+            CellState::DeletedTransactionLog => "deleted_in_log",
+        };
+
+        let values: Vec<_> = cell
                 .value_iter()
                 .map(|cell_value| {
                     let (value, _) = cell_value.get_content();
@@ -65,32 +177,45 @@ impl WindowsHiveParser {
                 })
                 .collect();
 
-            sink(ObjectParsed {
-                parser: self.name(),
-                kind: "windows.hive.key",
-                text: format!(
-                    "[KEY {}] {} (last modified {})",
-                    cell.key_name, cell.path, ts_rfc3339,
-                ),
-                json: json!({
-                    "key_name": cell.key_name,
-                    "full_path": cell.path,
-                    "signature": cell.detail.signature(),
-                    "last_writen_timestamp": ts_rfc3339,
-                    "last_writen_timestamp_unix": ts_unix,
-                    "last_writen_timestamp_unix_ms": ts_unix_ms,
-                    "is_recovered": cell.has_or_is_recovered(),
-                    "key_state": key_state,
-                    "size": cell.detail.size().abs(),
-                    "subkeys_count": cell.detail.number_of_sub_keys(),
-                    "values_count": cell.detail.number_of_key_values(),
-                    "values": values,
-                    "slack": hex::encode(cell.detail.slack()),
-                }),
-            })?;
-        }
+        sink(ObjectParsed {
+            parser: self.name(),
+            kind: "windows.hive.key",
+            text: format!(
+                "[KEY {}] {} (last modified {})",
+                cell.key_name, cell.path, ts_rfc3339,
+            ),
+            json: json!({
+                "key_name": cell.key_name,
+                "full_path": cell.path,
+                "signature": cell.detail.signature(),
+                "last_write_timestamp": ts_rfc3339,
+                "last_write_timestamp_unix": ts_unix,
+                "last_write_timestamp_unix_ms": ts_unix_ms,
+                "is_recovered": cell.has_or_is_recovered(),
+                "key_state": key_state,
+                "size": cell.detail.size().abs(),
+                "subkeys_count": cell.detail.number_of_sub_keys(),
+                "values_count": cell.detail.number_of_key_values(),
+                "values": values,
+                "slack": hex::encode(cell.detail.slack()),
+            }),
+        })
+    }
 
-        Ok(())
+    /// Enable recovery of deleted cells from slack
+    /// or transaction logs
+    pub fn recover_cells(mut self, v: bool) -> Self {
+        self.recover_cells = v;
+        self
+    }
+    
+    /// Enable parse_all_keys to recover information
+    /// about all keys in Hive files.
+    /// Default behaviour searches for a collection
+    /// of know important key values.
+    pub fn parse_all_keys(mut self, v: bool) -> Self {
+        self.parse_all_keys = v;
+        self
     }
 }
 
@@ -105,40 +230,6 @@ impl Parser for WindowsHiveParser {
 
     fn companion_specs(&self) -> &'static [CompanionSpec] {
         HIVE_COMPANIONS
-    }
-
-    fn extract_timeline_events(&self, _obj: &ObjectParsed) -> Vec<TimelineEvent> {
-        let Some(ts_unix_ms) = _obj.json["timestamp_unix_ms"].as_i64() else {
-            return Vec::new();
-        };
-
-        let description = match _obj.kind {
-            "windows.hive.key" => {
-                let key_name = _obj.json["key_name"].as_str().unwrap_or_default();
-                let key_path = _obj.json["key_path"].as_str().unwrap_or_default();
-                let key_state = _obj.json["key_state"].as_str().unwrap_or_default();
-
-                Some(format!("[KEY {}] {} ({})", key_name, key_path, key_state))
-            }
-            "windows.hive.value" => {
-                let value_name = _obj.json["value_name"].as_str().unwrap_or_default();
-                let value_type = _obj.json["value_type"].as_str().unwrap_or_default();
-                let value_decoded = _obj.json["value_decoded"].as_str().unwrap_or_default();
-
-                Some(format!(
-                    "[KEY VALUE {}] {} ({})",
-                    value_name, value_decoded, value_type
-                ))
-            }
-            _ => Option::None,
-        };
-
-        vec![TimelineEvent {
-            ts_unix_ms,
-            event_type: _obj.kind,
-            description,
-            actor: None,
-        }]
     }
 
     fn run_into(
@@ -167,7 +258,7 @@ impl Parser for WindowsHiveParser {
                 }
 
                 self.run_with_parser(
-                    parser_builder
+                    &mut parser_builder
                         .build()
                         .context("Failed to open Hive from Path")?,
                     sink,
@@ -178,7 +269,7 @@ impl Parser for WindowsHiveParser {
                 parser_builder.recover_deleted(self.recover_cells);
 
                 self.run_with_parser(
-                    parser_builder
+                    &mut parser_builder
                         .build()
                         .context("Failed to open Hive from Compound")?,
                     sink,
@@ -196,7 +287,7 @@ impl Parser for WindowsHiveParser {
                 parser_builder.recover_deleted(self.recover_cells);
 
                 self.run_with_parser(
-                    parser_builder
+                    &mut parser_builder
                         .build()
                         .context("Failed to open Hive from Compound")?,
                     sink,
@@ -224,7 +315,7 @@ impl Parser for WindowsHiveParser {
                 }
 
                 self.run_with_parser(
-                    parser_builder
+                    &mut parser_builder
                         .build()
                         .context("Failed to open Hive from Compound")?,
                     sink,
