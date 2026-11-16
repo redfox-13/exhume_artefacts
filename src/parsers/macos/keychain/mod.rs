@@ -14,7 +14,7 @@ pub(crate) mod legacy;
 pub(crate) mod modern;
 
 use crate::core::{CompanionSpec, ObjectParsed, Parser, ParserInput};
-use crate::parsers::mobile::sqlite::SqliteEvidence;
+use crate::formats::sqlite::SqliteEvidence;
 use anyhow::{Result, bail};
 use std::fs;
 

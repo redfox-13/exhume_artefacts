@@ -7,7 +7,7 @@
 //! from the file path. Emits `macos.persistence.launch_item`.
 
 use crate::core::{ObjectParsed, Parser, ParserInput};
-use crate::parsers::macos::common::input::FileEvidence;
+use crate::input::file::FileEvidence;
 use anyhow::{Result, bail};
 use plist::Value as Plist;
 use serde_json::{Map, Value, json};

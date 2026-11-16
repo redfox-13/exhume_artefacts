@@ -5,7 +5,7 @@ use serde_json::json;
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
-use crate::core::{ObjectParsed, Parser, ParserInput, TimelineEvent};
+use crate::core::{ObjectParsed, Parser, ParserInput, ParserIssue, ParserIssueCode, TimelineEvent};
 
 /// Parser for Windows EVTX event log files.
 ///
@@ -62,6 +62,7 @@ impl WindowsEvtxParser {
         &self,
         parser: EvtxCrateParser<R>,
         sink: &mut dyn FnMut(ObjectParsed) -> Result<()>,
+        diagnostic: &mut dyn FnMut(ParserIssue) -> Result<()>,
     ) -> Result<()>
     where
         R: Read + Seek,
@@ -71,12 +72,16 @@ impl WindowsEvtxParser {
         let settings = Arc::new(self.settings.clone());
 
         // Iterate over all EVTX chunks produced by the parser.
-        for chunk_data_res in parser.into_chunks() {
+        for (chunk_index, chunk_data_res) in parser.into_chunks().enumerate() {
             let mut chunk_data = match chunk_data_res {
                 Ok(c) => c,
                 // If best-effort is enabled, log the error and skip the chunk.
                 Err(e) if self.best_effort => {
-                    eprintln!("EVTX: skipping chunk (read error): {e}");
+                    diagnostic(ParserIssue {
+                        code: ParserIssueCode::ChunkRead,
+                        unit: Some(chunk_index as u64),
+                        message: format!("EVTX: skipping chunk (read error): {e}"),
+                    })?;
                     continue;
                 }
                 // Otherwise, propagate the error.
@@ -88,7 +93,11 @@ impl WindowsEvtxParser {
                 Ok(ch) => ch,
                 // Skip invalid chunks in best-effort mode.
                 Err(e) if self.best_effort => {
-                    eprintln!("EVTX: skipping chunk (parse error): {e}");
+                    diagnostic(ParserIssue {
+                        code: ParserIssueCode::ChunkParse,
+                        unit: Some(chunk_index as u64),
+                        message: format!("EVTX: skipping chunk (parse error): {e}"),
+                    })?;
                     continue;
                 }
                 Err(e) => return Err(e.into()),
@@ -100,7 +109,11 @@ impl WindowsEvtxParser {
                     Ok(r) => r,
                     // Skip invalid records in best-effort mode.
                     Err(e) if self.best_effort => {
-                        eprintln!("EVTX: skipping record (error): {e}");
+                        diagnostic(ParserIssue {
+                            code: ParserIssueCode::RecordParse,
+                            unit: Some(chunk_index as u64),
+                            message: format!("EVTX: skipping record (error): {e}"),
+                        })?;
                         continue;
                     }
                     Err(e) => return Err(e.into()),
@@ -181,12 +194,24 @@ impl Parser for WindowsEvtxParser {
         input: ParserInput,
         sink: &mut dyn FnMut(ObjectParsed) -> Result<()>,
     ) -> Result<()> {
+        self.run_into_with_diagnostics(input, sink, &mut |issue| {
+            eprintln!("{}", issue.message);
+            Ok(())
+        })
+    }
+
+    fn run_into_with_diagnostics(
+        &self,
+        input: ParserInput,
+        sink: &mut dyn FnMut(ObjectParsed) -> Result<()>,
+        diagnostic: &mut dyn FnMut(ParserIssue) -> Result<()>,
+    ) -> Result<()> {
         match input {
             ParserInput::Path(p) => {
                 // Open EVTX from a filesystem path.
                 let parser =
                     EvtxCrateParser::from_path(p).context("failed to open EVTX from path")?;
-                self.run_with_parser(parser, sink)
+                self.run_with_parser(parser, sink, diagnostic)
             }
             ParserInput::Bytes(b) => {
                 // Quickly validate the EVTX magic header before parsing.
@@ -196,13 +221,13 @@ impl Parser for WindowsEvtxParser {
                 // Open EVTX from an in-memory buffer.
                 let parser =
                     EvtxCrateParser::from_buffer(b).context("failed to open EVTX from buffer")?;
-                self.run_with_parser(parser, sink)
+                self.run_with_parser(parser, sink, diagnostic)
             }
             ParserInput::ReadSeek(mut rs) => {
                 // Ensure we start reading from the beginning of the stream.
                 rs.seek(SeekFrom::Start(0))?;
                 let parser = evtx::EvtxParser::from_read_seek(rs)?;
-                self.run_with_parser(parser, sink)
+                self.run_with_parser(parser, sink, diagnostic)
             }
             ParserInput::Compound(_) => {
                 anyhow::bail!("windows_evtx does not support compound parser input")

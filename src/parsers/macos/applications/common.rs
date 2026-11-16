@@ -1,4 +1,4 @@
-use crate::parsers::macos::common::input::FileEvidence;
+use crate::input::file::FileEvidence;
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
 use plist::{Date, Dictionary, Value as Plist};

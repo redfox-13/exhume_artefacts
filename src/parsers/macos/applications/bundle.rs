@@ -5,7 +5,7 @@ use super::common::{
     string_array, user_from_path,
 };
 use crate::core::{ObjectParsed, Parser, ParserInput};
-use crate::parsers::macos::common::input::FileEvidence;
+use crate::input::file::FileEvidence;
 use anyhow::{Result, bail};
 use plist::Value as Plist;
 use serde_json::{Value, json};

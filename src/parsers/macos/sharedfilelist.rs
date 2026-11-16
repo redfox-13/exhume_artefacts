@@ -7,8 +7,8 @@
 //! graph, decode each bookmark and emit one `macos.recent.item` per entry.
 
 use crate::core::{ObjectParsed, Parser, ParserInput};
+use crate::input::file::FileEvidence;
 use crate::parsers::macos::common::bookmark::decode_bookmark;
-use crate::parsers::macos::common::input::FileEvidence;
 use anyhow::{Result, bail};
 use plist::Value as Plist;
 use serde_json::json;

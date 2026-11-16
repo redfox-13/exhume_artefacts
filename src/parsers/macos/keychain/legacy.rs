@@ -16,8 +16,8 @@
 
 use super::{KEYCHAIN_ITEM_KIND, PARSER_NAME};
 use crate::core::ObjectParsed;
-use crate::parsers::macos::common::util::sqlite_source_json;
-use crate::parsers::mobile::sqlite::SqliteEvidence;
+use crate::formats::sqlite::SqliteEvidence;
+use crate::formats::sqlite::sqlite_source_json;
 use anyhow::{Result, bail};
 use chrono::{TimeZone, Utc};
 use serde_json::{Value, json};

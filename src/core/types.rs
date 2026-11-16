@@ -39,7 +39,8 @@ impl<T: Read + Seek> ReadSeek for T {}
 
 /// Path resolution rule for files that must be provided alongside a primary
 /// parser input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum CompanionPathRule {
     /// Resolve a companion by appending a suffix to the primary evidence path.
     Suffix(&'static str),
@@ -50,7 +51,7 @@ pub enum CompanionPathRule {
 }
 
 /// Description of a companion file a parser can consume with a primary input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct CompanionSpec {
     pub role: &'static str,
     pub path_rule: CompanionPathRule,

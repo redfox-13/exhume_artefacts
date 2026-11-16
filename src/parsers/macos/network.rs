@@ -13,8 +13,8 @@
 //! packets are never emitted.
 
 use crate::core::{ObjectParsed, Parser, ParserInput, TimelineEvent};
-use crate::parsers::macos::common::input::FileEvidence;
-use crate::parsers::macos::common::timestamps::apple_absolute_to_json;
+use crate::formats::timestamps::apple_absolute_to_json;
+use crate::input::file::FileEvidence;
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
 use plist::{Dictionary, Value as Plist};

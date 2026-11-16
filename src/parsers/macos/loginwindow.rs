@@ -15,7 +15,7 @@
 //! hooks are persistence mechanisms and receive `macos.persistence.*` kinds.
 
 use crate::core::{ObjectParsed, Parser, ParserInput};
-use crate::parsers::macos::common::input::FileEvidence;
+use crate::input::file::FileEvidence;
 use anyhow::{Result, bail};
 use plist::{Dictionary, Value as Plist};
 use serde_json::{Value, json};

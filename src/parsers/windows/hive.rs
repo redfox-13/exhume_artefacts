@@ -261,12 +261,17 @@ static ARTEFACTS: LazyLock<TrieNode> = LazyLock::new(|| {
 ///
 /// This type wraps the `notatin` crate and adapts it to the crate's
 /// `Parser` trait, emitting one [`ObjectParsed`] per hive key and key value.
-#[derive(Default)]
 pub struct WindowsHiveParser {
     //enable recovery of deleted cells
     recover_cells: bool,
     //only parse known keys with forensic value
     parse_all_keys: bool,
+}
+
+impl Default for WindowsHiveParser {
+    fn default() -> Self {
+        Self { recover_cells: true, parse_all_keys: Default::default() }
+    }
 }
 
 impl WindowsHiveParser {

@@ -7,11 +7,11 @@
 
 use super::{KEYCHAIN_ITEM_KIND, PARSER_NAME};
 use crate::core::ObjectParsed;
-use crate::parsers::macos::common::timestamps::apple_absolute_to_json;
-use crate::parsers::macos::common::util::sqlite_source_json;
-use crate::parsers::mobile::sqlite::{
+use crate::formats::sqlite::sqlite_source_json;
+use crate::formats::sqlite::{
     SqliteConnection, SqliteEvidence, SqliteSchema, SqliteStatement, select_column,
 };
+use crate::formats::timestamps::apple_absolute_to_json;
 use anyhow::Result;
 use serde_json::{Value, json};
 

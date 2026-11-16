@@ -5,7 +5,7 @@ use super::common::{
     user_from_path,
 };
 use crate::core::{ObjectParsed, Parser, ParserInput, TimelineEvent};
-use crate::parsers::macos::common::input::FileEvidence;
+use crate::input::file::FileEvidence;
 use anyhow::{Result, bail};
 use serde_json::json;
 

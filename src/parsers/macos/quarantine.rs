@@ -6,11 +6,10 @@
 //! `macos.download.quarantine`. Timestamps are CFAbsoluteTime.
 
 use crate::core::{CompanionSpec, ObjectParsed, Parser, ParserInput, TimelineEvent};
-use crate::parsers::macos::common::timestamps::apple_absolute_to_json;
-use crate::parsers::macos::common::util::{non_empty, sqlite_source_json};
-use crate::parsers::mobile::sqlite::{
-    SqliteConnection, SqliteEvidence, SqliteSchema, select_column,
-};
+use crate::formats::sqlite::sqlite_source_json;
+use crate::formats::sqlite::{SqliteConnection, SqliteEvidence, SqliteSchema, select_column};
+use crate::formats::timestamps::apple_absolute_to_json;
+use crate::parsers::macos::common::util::non_empty;
 use anyhow::{Context, Result, bail};
 use serde_json::json;
 
@@ -167,7 +166,7 @@ mod tests {
     use super::MacosQuarantineParser;
     use crate::Parser;
     use crate::core::ParserInput;
-    use crate::parsers::mobile::sqlite::SqliteConnection;
+    use crate::formats::sqlite::SqliteConnection;
     use anyhow::Result;
 
     #[test]

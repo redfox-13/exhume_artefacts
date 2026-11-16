@@ -11,8 +11,8 @@
 //! a companion; cataloguing both as primaries would duplicate most records.
 
 use crate::core::{CompanionSpec, ObjectParsed, Parser, ParserInput, TimelineEvent};
-use crate::parsers::macos::common::input::{FileEvidence, FileRef};
-use crate::parsers::macos::common::timestamps::{apple_absolute_to_json, firefox_prtime_to_json};
+use crate::formats::timestamps::{apple_absolute_to_json, firefox_prtime_to_json};
+use crate::input::file::{FileEvidence, FileRef};
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet};

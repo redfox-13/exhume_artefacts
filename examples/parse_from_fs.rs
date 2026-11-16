@@ -2,9 +2,9 @@ use anyhow::{Context, Result};
 use clap::*;
 use clap_num::maybe_hex;
 use exhume_artefacts::parsers::build_registry;
-use exhume_artefacts::run_parser_by_name;
-use exhume_artefacts::{ObjectParsed, core::ParserInput};
-use exhume_body::Body;
+use exhume_artefacts::{ObjectParsed, ParserContext, ParserSource, core::ParserInput};
+use exhume_artefacts::{cli, input};
+use exhume_body::credentials;
 use exhume_filesystem::Filesystem;
 use exhume_filesystem::detected_fs::detect_filesystem;
 use exhume_filesystem::filesystem::{FileCommon, FsFileReadSeek};
@@ -18,9 +18,13 @@ use log::{LevelFilter, error};
 /// - Locates a file by its filesystem record identifier.
 /// - Runs a named artefact parser against that file.
 /// - Emits parsed objects as JSON Lines (JSONL) to stdout.
-fn main() -> anyhow::Result<()> {
+fn main() -> std::process::ExitCode {
+    cli::finish(run())
+}
+
+fn run() -> anyhow::Result<()> {
     // Define and parse command‑line arguments.
-    let matches = Command::new("parse_from_fs")
+    let command = Command::new("parse_from_fs")
         .about("Parse a file (by filesystem record ID) inside a disk image and output JSONL.")
         .arg(
             Arg::new("list_parsers")
@@ -33,7 +37,7 @@ fn main() -> anyhow::Result<()> {
                 .short('b')
                 .long("body")
                 .value_parser(value_parser!(String))
-                .required_unless_present("list_parsers"),
+                .required_unless_present_any(["list_parsers", "describe_parser"]),
         )
         .arg(
             Arg::new("format")
@@ -48,7 +52,7 @@ fn main() -> anyhow::Result<()> {
                 .short('o')
                 .long("offset")
                 .value_parser(maybe_hex::<u64>)
-                .required_unless_present("list_parsers")
+                .required_unless_present_any(["list_parsers", "describe_parser"])
                 .help("Filesystem start (bytes, dec or hex)"),
         )
         .arg(
@@ -56,7 +60,7 @@ fn main() -> anyhow::Result<()> {
                 .short('s')
                 .long("size")
                 .value_parser(maybe_hex::<u64>)
-                .required_unless_present("list_parsers")
+                .required_unless_present_any(["list_parsers", "describe_parser"])
                 .help("Filesystem size (in sectors, dec or hex)"),
         )
         .arg(
@@ -64,7 +68,7 @@ fn main() -> anyhow::Result<()> {
                 .short('r')
                 .long("record")
                 .value_parser(maybe_hex::<usize>)
-                .required_unless_present("list_parsers")
+                .required_unless_present_any(["list_parsers", "describe_parser"])
                 .help("File record identifier"),
         )
         .arg(
@@ -72,7 +76,7 @@ fn main() -> anyhow::Result<()> {
                 .short('p')
                 .long("parser")
                 .value_parser(value_parser!(String))
-                .required_unless_present("list_parsers"),
+                .required_unless_present_any(["list_parsers", "describe_parser"]),
         )
         .arg(
             Arg::new("log_level")
@@ -81,7 +85,10 @@ fn main() -> anyhow::Result<()> {
                 .value_parser(["error", "warn", "info", "debug", "trace"])
                 .default_value("info"),
         )
-        .get_matches();
+        .arg(Arg::new("source_path").long("source-path").help(
+            "Primary path inside the evidence, required by parsers that interpret source paths.",
+        ));
+    let mut matches = cli::configuration_arguments(password_args(command)).get_matches();
 
     // Configure and initialize the logger based on the requested log level.
     let log_level_str = matches.get_one::<String>("log_level").unwrap();
@@ -98,6 +105,11 @@ fn main() -> anyhow::Result<()> {
     // Build the global parser registry (mapping parser names to implementations).
     let registry = build_registry();
 
+    if let Some(name) = matches.get_one::<String>("describe_parser") {
+        let parser = registry.get(name.as_str()).context("unknown parser")?;
+        return cli::print_description(&**parser);
+    }
+
     // If requested, list all available parsers and exit without doing any parsing.
     if matches.get_flag("list_parsers") {
         println!("Available parsers:");
@@ -108,21 +120,37 @@ fn main() -> anyhow::Result<()> {
     }
 
     // Extract and normalize the remaining CLI arguments.
+    let parser_name = matches
+        .get_one::<String>("parser")
+        .context("missing parser name")?
+        .clone();
+    let parser = registry
+        .get(parser_name.as_str())
+        .ok_or_else(|| anyhow::anyhow!("unknown parser: {parser_name}"))?;
+    let options = cli::parser_options(&mut matches, parser.option_specs())?;
+    let context = ParserContext::new(parser.name(), parser.option_specs(), options)?;
     let body_path = matches.get_one::<String>("body").unwrap();
     let auto = String::from("auto");
     let format = matches.get_one::<String>("format").unwrap_or(&auto);
     let fs_offset = *matches.get_one::<u64>("offset").unwrap();
     let fs_size_sectors = *matches.get_one::<u64>("size").unwrap();
     let file_id = *matches.get_one::<usize>("file_id").unwrap();
-    let parser_name = matches.get_one::<String>("parser").unwrap();
-
-    // Ensure the requested parser exists in the registry before proceeding.
-    registry
-        .get(parser_name.as_str())
-        .ok_or_else(|| anyhow::anyhow!("unknown parser: {parser_name}"))?;
+    let companions = cli::companion_overrides(&matches)?;
+    let source_path = matches.get_one::<String>("source_path");
+    if parser.requires_source_metadata() && source_path.is_none() {
+        anyhow::bail!("this parser requires --source-path for its evidence path");
+    }
 
     // Open the disk image / body and detect the filesystem within the given region.
-    let body = Body::new(body_path.to_owned(), format);
+    let body = credentials::open_body(
+        body_path,
+        format,
+        matches
+            .get_one::<String>("password_file")
+            .map(String::as_str),
+        matches.get_flag("password_stdin"),
+    )
+    .map_err(anyhow::Error::msg)?;
     let partition_size_bytes = fs_size_sectors * body.get_sector_size() as u64;
 
     let mut fs = detect_filesystem(&body, fs_offset, partition_size_bytes, None)
@@ -153,16 +181,54 @@ fn main() -> anyhow::Result<()> {
     };
 
     // Wrap the filesystem file in a Read+Seek adapter expected by parsers.
-    let rs = FsFileReadSeek::new(&mut fs, file);
+    let input = if !parser.companion_specs().is_empty()
+        || !companions.is_empty()
+        || parser.requires_source_metadata()
+    {
+        input::filesystem_input(
+            &**parser,
+            &mut fs,
+            ParserSource::new(
+                "primary",
+                source_path
+                    .cloned()
+                    .unwrap_or_else(|| format!("<record:{file_id}>")),
+                None,
+                None,
+                Some(file_id as u64),
+            ),
+            &companions,
+        )?
+    } else {
+        ParserInput::ReadSeek(Box::new(FsFileReadSeek::new(&mut fs, file)))
+    };
 
-    // Run the requested parser against the file, streaming objects into `sink`.
-    run_parser_by_name(
-        &registry,
-        parser_name,
-        ParserInput::ReadSeek(Box::new(rs)),
-        &mut sink,
-    )
-    .with_context(|| format!("parser '{parser_name}' failed"))?;
+    parser
+        .run_into_with_context(input, &context, &mut sink, &mut |issue| {
+            eprintln!("{}", serde_json::to_string(&issue)?);
+            Ok(())
+        })
+        .with_context(|| format!("parser '{parser_name}' failed"))?;
 
     Ok(())
+}
+
+/// Register this executable's mutually exclusive container-password sources.
+fn password_args(command: clap::Command) -> clap::Command {
+    command
+        .arg(
+            clap::Arg::new("password_file")
+                .long("password-file")
+                .global(true)
+                .value_name("PATH")
+                .conflicts_with("password_stdin")
+                .help("Read the image container password from a file; remove one trailing line ending."),
+        )
+        .arg(
+            clap::Arg::new("password_stdin")
+                .long("password-stdin")
+                .global(true)
+                .action(clap::ArgAction::SetTrue)
+                .help("Read the image container password from stdin; remove one trailing line ending."),
+        )
 }

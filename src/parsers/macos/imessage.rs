@@ -2,17 +2,15 @@
 //!
 //! The desktop Messages store uses the identical schema to the iOS `sms.db`, so
 //! this parser reuses the shared Apple Messages engine
-//! ([`crate::parsers::mobile::ios::imessage`]) with a macOS config: only the
+//! ([`crate::parsers::apps::imessage`]) with a macOS config: only the
 //! parser name, platform tag, app label and materialized filename differ. It
 //! emits the canonical `chat.v1` envelope (`mobile.communication.message` /
 //! `mobile.communication.attachment`) so attachment-ref harvesting and any chat
 //! UI work across platforms.
 
+use crate::core::records::AppInfo;
 use crate::core::{CompanionSpec, ObjectParsed, Parser, ParserInput, TimelineEvent};
-use crate::parsers::mobile::common::records::AppInfo;
-use crate::parsers::mobile::ios::imessage::{
-    MessagesConfig, extract_message_timeline, run_messages,
-};
+use crate::parsers::apps::imessage::{MessagesConfig, extract_message_timeline, run_messages};
 use anyhow::Result;
 
 const PARSER_NAME: &str = "macos_imessage";
@@ -67,7 +65,7 @@ mod tests {
     use super::MacosIMessageParser;
     use crate::Parser;
     use crate::core::ParserInput;
-    use crate::parsers::mobile::sqlite::SqliteConnection;
+    use crate::formats::sqlite::SqliteConnection;
     use anyhow::Result;
 
     #[test]

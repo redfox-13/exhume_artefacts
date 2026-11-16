@@ -3,7 +3,7 @@
 use super::common::{parse_plist, scope_from_path};
 use super::common::{plist_date_to_json, sorted_keys, string, string_array, timestamp_unix_ms};
 use crate::core::{ObjectParsed, Parser, ParserInput, TimelineEvent};
-use crate::parsers::macos::common::input::FileEvidence;
+use crate::input::file::FileEvidence;
 use anyhow::{Result, bail};
 use plist::Dictionary;
 use serde_json::json;

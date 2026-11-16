@@ -5,11 +5,10 @@
 //! `macos.browser.site`, `macos.browser.visit` and `macos.browser.download`.
 
 use crate::core::{CompanionSpec, ObjectParsed, Parser, ParserInput, TimelineEvent};
-use crate::parsers::macos::common::timestamps::chrome_webkit_to_json;
-use crate::parsers::macos::common::util::{host_from_url, non_empty, sqlite_source_json};
-use crate::parsers::mobile::sqlite::{
-    SqliteConnection, SqliteEvidence, SqliteSchema, select_column,
-};
+use crate::formats::sqlite::sqlite_source_json;
+use crate::formats::sqlite::{SqliteConnection, SqliteEvidence, SqliteSchema, select_column};
+use crate::formats::timestamps::chrome_webkit_to_json;
+use crate::parsers::macos::common::util::{host_from_url, non_empty};
 use anyhow::{Context, Result, bail};
 use serde_json::json;
 
@@ -313,7 +312,7 @@ mod tests {
     use super::MacosChromiumParser;
     use crate::Parser;
     use crate::core::ParserInput;
-    use crate::parsers::mobile::sqlite::SqliteConnection;
+    use crate::formats::sqlite::SqliteConnection;
     use anyhow::Result;
 
     #[test]

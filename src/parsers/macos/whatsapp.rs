@@ -4,12 +4,12 @@
 //! (`ZWAMESSAGE` / `ZWACHATSESSION` / `ZWAMEDIAITEM`) as iOS WhatsApp, under
 //! `~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/`. This parser
 //! reuses the shared WhatsApp engine
-//! ([`crate::parsers::mobile::ios::whatsapp`]) with a macOS config and emits the
+//! ([`crate::parsers::apps::whatsapp::apple`]) with a macOS config and emits the
 //! canonical `chat.v1` envelope.
 
+use crate::core::records::AppInfo;
 use crate::core::{CompanionSpec, ObjectParsed, Parser, ParserInput, TimelineEvent};
-use crate::parsers::mobile::common::records::AppInfo;
-use crate::parsers::mobile::ios::whatsapp::{
+use crate::parsers::apps::whatsapp::apple::{
     WhatsAppConfig, extract_whatsapp_timeline, run_whatsapp,
 };
 use anyhow::Result;
@@ -65,7 +65,7 @@ mod tests {
     use super::MacosWhatsAppParser;
     use crate::Parser;
     use crate::core::ParserInput;
-    use crate::parsers::mobile::sqlite::SqliteConnection;
+    use crate::formats::sqlite::SqliteConnection;
     use anyhow::Result;
 
     #[test]
