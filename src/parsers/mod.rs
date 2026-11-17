@@ -15,4 +15,4 @@ pub mod windows;
 
 pub use registry::{ParserRegistry, build_registry};
 // Preserve the original public Windows parser module paths.
-pub use windows::{evtx, pe, pml};
+pub use windows::{evtx, hive, pe, pml};
