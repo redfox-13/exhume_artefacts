@@ -1,9 +1,12 @@
-use chrono::{DateTime, Utc};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
-use super::super::{Artefact, Outcome, TrieNode as T, filetime_to_rfc3339, parse_values};
+use crate::formats::timestamps::{unix_seconds_to_json, windows_filetime_to_json};
 
-const KIND: &str = "windows.hive.windows_version";
+use super::super::{
+    Artefact, Outcome, TrieNode as T, hive_kind_prefix, parse_value_map, value_text,
+};
+
+pub const KIND: &str = hive_kind_prefix!("sysinfo.windows_version");
 
 pub(super) fn artefact() -> Artefact {
     Artefact {
@@ -11,10 +14,10 @@ pub(super) fn artefact() -> Artefact {
         build: || {
             vec![T::lit("Microsoft").sub(vec![T::lit("Windows NT").sub(vec![
                 T::lit("CurrentVersion").emit(KIND, |object, cell| {
-                    let values: Map<String, Value> = parse_values(cell, |value| {
+                    let values = parse_value_map(cell, |value| {
                         Some((
                             value.get_pretty_name().to_ascii_lowercase(),
-                            json!(super::super::value_text(value)),
+                            json!(value_text(value)),
                         ))
                     });
                     let text = |name: &str| {
@@ -23,24 +26,33 @@ pub(super) fn artefact() -> Artefact {
                             .and_then(Value::as_str)
                             .map(str::to_owned)
                     };
+
+                    let text_any = |names: &[&str]| names.iter().find_map(|name| text(name));
                     let Some(product_name) = text("productname") else {
                         return Outcome::Skip;
                     };
-                    let install_date = text("installdate")
+
+                    let install_date = unix_seconds_to_json(
+                        text("installdate")
                         .and_then(|value| value.parse::<i64>().ok())
-                        .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0))
-                        .map(|date| date.to_rfc3339());
+                    );
+
                     let install_time = text("installtime")
                         .and_then(|value| value.parse::<u64>().ok())
-                        .map(filetime_to_rfc3339)
-                        .and_then(|time| time.get("timestamp_rfc3339").cloned());
+                        .map(windows_filetime_to_json);
+
+                    let current_build = text_any(&["currentbuildnumber", "currentbuild"]);
+                    let edition_id = text_any(&["editionid", "compositioneditionid"]);
 
                     object.text = format!(
                         "Windows system information: {} (build {})",
                         product_name,
-                        text("currentbuild").unwrap_or_else(|| "?".into())
+                        current_build.as_deref().unwrap_or("?")
                     );
                     object.data.insert("product_name".into(), json!(product_name));
+                    object
+                        .data
+                        .insert("system_root".into(), json!(text("systemroot")));
                     object
                         .data
                         .insert("release_id".into(), json!(text("releaseid")));
@@ -50,13 +62,13 @@ pub(super) fn artefact() -> Artefact {
                     );
                     object
                         .data
-                        .insert("csd_version".into(), json!(text("csdversion")));
+                        .insert("current_version".into(), json!(text("currentversion")));
                     object
                         .data
-                        .insert("current_build".into(), json!(text("currentbuild")));
+                        .insert("csd_version".into(), json!(text("csdversion")));
                     object.data.insert(
-                        "ubr".into(),
-                        json!(text("ubr").and_then(|value| value.parse::<u32>().ok())),
+                        "current_build".into(),
+                        json!(current_build),
                     );
                     object
                         .data
@@ -64,10 +76,11 @@ pub(super) fn artefact() -> Artefact {
                     object
                         .data
                         .insert("build_lab_ex".into(), json!(text("buildlabex")));
-                    object.data.insert(
-                        "edition_id".into(),
-                        json!(text("compositioneditionid")),
-                    );
+                    object.data.insert("build_branch".into(), json!(text("buildbranch")));
+                    object.data.insert("edition_id".into(), json!(edition_id));
+                    object
+                        .data
+                        .insert("product_id".into(), json!(text("productid")));
                     object.data.insert(
                         "registered_organization".into(),
                         json!(text("registeredorganization")),
@@ -78,6 +91,10 @@ pub(super) fn artefact() -> Artefact {
                     );
                     object.data.insert("install_date".into(), json!(install_date));
                     object.data.insert("install_time".into(), json!(install_time));
+                    object.data.insert(
+                        "windows_version_registry_values".into(),
+                        json!(values),
+                    );
                     Outcome::Keep
                 }),
             ])])]

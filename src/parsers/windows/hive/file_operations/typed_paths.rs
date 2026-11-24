@@ -1,8 +1,8 @@
-use serde_json::{json, Value};
+use serde_json::json;
 
-use super::super::{hive_kind_prefix, parse_values, Artefact, Outcome, TrieNode as T};
+use super::super::{hive_kind_prefix, registry_value_map, Artefact, Outcome, TrieNode as T};
 
-const KIND: &str = hive_kind_prefix!("file_operations.typed_paths");
+pub const KIND: &str = hive_kind_prefix!("file_operations.typed_paths");
 
 pub(super) fn artefact() -> Artefact {
     Artefact {
@@ -15,12 +15,7 @@ pub(super) fn artefact() -> Artefact {
                             "TypedPaths",
                         )
                         .emit(KIND, |object, cell| {
-                            let entries: Vec<Value> = parse_values(cell, |value| {
-                                Some(json!({
-                                    "name": value.get_pretty_name(),
-                                    "path": super::super::value_text(value),
-                                }))
-                            });
+                            let entries = registry_value_map(cell);
                             object.text = format!("Typed file paths: {} entries", entries.len());
                             object.data.insert("typed_file_paths".into(), json!(entries));
                             Outcome::Keep

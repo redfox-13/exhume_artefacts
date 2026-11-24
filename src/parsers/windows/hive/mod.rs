@@ -8,20 +8,21 @@ use notatin::cell_key_node::CellKeyNode;
 use notatin::cell_key_value::CellKeyValue;
 use notatin::parser::Parser as HiveParser;
 use notatin::parser_builder::ParserBuilder;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Seek, SeekFrom};
 use std::path::PathBuf;
 
-mod devices;
 mod browser_activity;
+mod devices;
 mod file_operations;
 mod network;
 mod persistence;
 mod program_execution;
+mod profiles;
 mod security;
-mod system;
+mod sysinfo;
 mod user_behavior;
 
 const HIVE_COMPANIONS: &[CompanionSpec] = &[
@@ -35,14 +36,20 @@ const HIVE_PARSER_OPTIONS: &'static [ParserOptionSpec] = &[
         name: "artefact",
         label: "Artefact",
         description: concat!(
-            "Choose one artefact by name. Full artefact names are accepted e.g. 'windows.hive.group.artefact'\n",
-            "Current artefact list:",
+            "Choose one artefact by name. Full artefact names are accepted e.g. 'windows.hive.group.artefact'. Available:",
             "devices.usb",
             ", devices.usbstor",
+            ", devices.volume_mappings",
+            ", devices.readyboost_history",
+            ", devices.audio_endpoints",
+            ", devices.portable_devices",
+            ", devices.printers",
             ", persistence.appinit",
             ", persistence.appcert_dlls",
             ", persistence.command_processor",
+            ", persistence.com_registration",
             ", persistence.image_file_execution_options",
+            ", persistence.print_components",
             ", persistence.run",
             ", persistence.runonce_ex",
             ", persistence.service",
@@ -50,29 +57,65 @@ const HIVE_PARSER_OPTIONS: &'static [ParserOptionSpec] = &[
             ", persistence.startup_approved",
             ", persistence.task_cache",
             ", persistence.winlogon",
+            ", persistence.netsh_helpers",
+            ", persistence.shell_overlay_handlers",
+            ", persistence.wsh_settings",
+            ", persistence.windows_address_book",
+            ", persistence.file_type_commands",
+            ", persistence.exefile_associations",
             ", program_execution.amcache",
+            ", program_execution.app_paths",
             ", program_execution.appcompat_cache",
+            ", program_execution.appcompat_flags",
             ", program_execution.bam",
             ", program_execution.dam",
+            ", program_execution.mui_cache",
             ", program_execution.syscache",
+            ", program_execution.uninstall",
+            ", program_execution.heap_leak_detection",
+            ", program_execution.msi_products",
+            ", program_execution.drivers32",
             ", browser_activity.typed_urls",
+            ", browser_activity.security_zones",
+            ", browser_activity.outlook_webview",
             ", file_operations.comdlg32",
             ", file_operations.recent_docs",
+            ", file_operations.shellbags",
             ", file_operations.typed_paths",
+            ", file_operations.recent_document_controls",
             ", user_behavior.feature_usage",
             ", user_behavior.recent_apps",
             ", user_behavior.run_mru",
             ", user_behavior.userassist",
-            ", system.computer_name",
-            ", system.user_profiles",
-            ", system.timezone",
-            ", windows_version",
+            ", user_behavior.wordwheel_query",
+            ", user_behavior.last_logged_on",
+            ", user_behavior.app_keys",
+            ", user_behavior.this_pc_policy",
+            ", sysinfo.computer_name",
+            ", sysinfo.user_profiles",
+            ", sysinfo.timezone",
+            ", sysinfo.windows_version",
+            ", sysinfo.wbem",
+            ", sysinfo.spp_clients",
+            ", sysinfo.scheduling_agent",
+            ", sysinfo.wow64_configuration",
+            ", sysinfo.windows_update_client",
+            ", sysinfo.display_calibration",
             ", network.network_list",
+            ", network.interfaces",
+            ", network.mapped_drives",
             ", network.port_proxy",
+            ", network.proxy_settings",
             ", network.persistent_routes",
+            ", network.group_policy_settings",
             ", security.defender",
             ", security.lsa",
+            ", security.sam_accounts",
+            ", security.sam_aliases",
             ", security.uac",
+            ", security.security_center",
+            ", security.powershell_execution_policy",
+            ", security.file_handler_overrides",
         ),
         value_type: ParserOptionType::String,
         required: false,
@@ -82,14 +125,22 @@ const HIVE_PARSER_OPTIONS: &'static [ParserOptionSpec] = &[
         name: "profile",
         label: "Profile",
         description: concat!(
-            "Choose a profile (group of artefacts). Available:",
-            "devices",
+            "Choose a profile (group of artefacts). Available: ",
+            "system",
+            ", software",
+            ", sam",
+            ", ntuser",
+            ", default",
+            ", usrclass",
+            ", amcache",
+            ", syscache",
+            ", devices",
             ", persistence",
             ", program_execution",
             ", browser_activity",
             ", file_operations",
             ", user_behavior",
-            ", system",
+            ", sysinfo",
             ", network",
             ", security."
         ),
@@ -118,12 +169,12 @@ pub(super) use hive_kind_prefix;
 const OBJECT_JSON_DATA: &'static str = "data";
 const OBJECT_JSON_METADATA: &'static str = "metadata";
 const OBJECT_JSON_SOURCES: &'static str = "sources";
-const FILETIME_TO_UNIX_OFFSET_100NS: i128 = 116_444_736_000_000_000;
 
 // ---------------------------------------------------------------------------
 // Path segment for trie construction
 // ---------------------------------------------------------------------------
 #[allow(dead_code)]
+#[derive(PartialEq, Eq, Hash)]
 pub(crate) enum PathSegment {
     Literal(&'static str),
     Prefix(&'static str),
@@ -173,6 +224,7 @@ pub(super) struct ObjectOutput {
     kind: &'static str,
     metadata: Map<String, Value>,
     sources: Vec<Value>,
+    include_raw_value_sources: bool,
     pub text: String,
     pub data: Map<String, Value>,
 }
@@ -196,6 +248,7 @@ impl ObjectOutput {
             kind,
             metadata,
             sources: Vec::new(),
+            include_raw_value_sources: true,
             text: String::new(),
             data: Map::new(),
         }
@@ -219,13 +272,20 @@ impl ObjectOutput {
             "last_write_timestamp_rfc3339": ts_rfc3339,
             "key_state": Self::parse_key_state(cell),
         }));
-        if let Some(raw_value_sources) = self
-            .metadata
-            .get_mut("raw_value_sources")
-            .and_then(Value::as_array_mut)
-        {
-            raw_value_sources.push(Self::raw_value_source(cell));
+        if self.include_raw_value_sources {
+            if let Some(raw_value_sources) = self
+                .metadata
+                .get_mut("raw_value_sources")
+                .and_then(Value::as_array_mut)
+            {
+                raw_value_sources.push(Self::raw_value_source(cell));
+            }
         }
+    }
+
+    pub(super) fn omit_raw_value_sources(&mut self) {
+        self.include_raw_value_sources = false;
+        self.metadata.remove("raw_value_sources");
     }
 
     fn raw_value_source(cell: &CellKeyNode) -> Value {
@@ -382,49 +442,27 @@ pub(super) struct Artefact {
 
 impl Artefact {
     fn all_artefacts() -> Vec<Artefact> {
-        Self::profiles()
-            .into_iter()
-            .flat_map(|(_, artefacts)| artefacts)
-            .collect()
+        profiles::all_artefacts()
     }
 
     fn str_to_artefact(string: &str) -> Option<Artefact> {
         Self::all_artefacts().into_iter().find(|artefact| {
             if artefact.kind.eq_ignore_ascii_case(string) {
-                return true
+                return true;
             }
 
-            artefact.kind
+            let kind = artefact
+                .kind
                 .strip_prefix(HIVE_KIND_PREFIX)
                 .unwrap_or(artefact.kind)
-                .eq_ignore_ascii_case(string)
+                .to_owned();
+            
+            kind.eq_ignore_ascii_case(string)
         })
     }
 
     fn str_to_profile(string: &str) -> Option<Vec<Artefact>> {
-        let normalized = string.trim()
-            .to_ascii_lowercase()
-            .replace('-', "_")
-            .replace(' ', "_");
-
-        Self::profiles()
-            .into_iter()
-            .find(|(name, _)| *name == normalized.as_str())
-            .map(|(_, artefacts)| artefacts)
-    }
-
-    fn profiles() -> Vec<(&'static str, Vec<Artefact>)> {
-        vec![
-            ("devices", devices::profile()),
-            ("persistence", persistence::profile()),
-            ("program_execution", program_execution::profile()),
-            ("browser_activity", browser_activity::profile()),
-            ("file_operations", file_operations::profile()),
-            ("user_behavior", user_behavior::profile()),
-            ("system", system::profile()),
-            ("network", network::profile()),
-            ("security", security::profile()),
-        ]
+        profiles::profile(string)
     }
 }
 
@@ -432,12 +470,34 @@ impl Artefact {
 // Shared data parsers (used by the profile files)
 // ---------------------------------------------------------------------------
 
-pub(crate) fn parse_values<F, T, O>(cell: &CellKeyNode, format: F) -> T
+pub(crate) fn parse_value_map<F>(cell: &CellKeyNode, format: F) -> Map<String, Value>
 where
-    F: Fn(&CellKeyValue) -> Option<O>,
-    T: FromIterator<O>,
+    F: Fn(&CellKeyValue) -> Option<(String, Value)>,
 {
-    cell.value_iter().filter_map(|v| format(&v)).collect()
+    let mut values: HashMap<String, Vec<Value>> = HashMap::new();
+    for value in cell.value_iter() {
+        if let Some((name, data)) = format(&value) {
+            values.entry(name).or_default().push(data);
+        }
+    }
+
+    values
+        .into_iter()
+        .map(|(name, mut data)| {
+            let value = if data.len() == 1 {
+                data.remove(0)
+            } else {
+                Value::Array(data)
+            };
+            (name, value)
+        })
+        .collect()
+}
+
+pub(crate) fn registry_value_map(cell: &CellKeyNode) -> Map<String, Value> {
+    parse_value_map(cell, |value| {
+        Some((value.get_pretty_name(), json!(value_text(value))))
+    })
 }
 
 pub(crate) fn value_text(value: &CellKeyValue) -> String {
@@ -460,23 +520,6 @@ pub(crate) fn parse_time(cell: &CellKeyNode) -> (i64, i64, String) {
         filetime.timestamp_millis(),
         filetime.to_rfc3339(),
     )
-}
-
-pub(crate) fn filetime_to_rfc3339(filetime: u64) -> Value {
-    let unix_100ns = i128::from(filetime) - FILETIME_TO_UNIX_OFFSET_100NS;
-
-    let seconds = unix_100ns.div_euclid(10_000_000);
-    let nanos = (unix_100ns.rem_euclid(10_000_000) * 100) as u32;
-
-    let timestamp = i64::try_from(seconds)
-        .ok()
-        .and_then(|seconds| chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, nanos));
-
-    json!({
-        "timestamp_rfc3339": timestamp.map_or(Value::Null, |time| json!(time.to_rfc3339())),
-        "timestamp_unix": timestamp.map_or(Value::Null, |time| json!(time.timestamp())),
-        "timestamp_unix_ms": timestamp.map_or(Value::Null, |time| json!(time.timestamp_millis())),
-    })
 }
 
 // ---------------------------------------------------------------------------
@@ -535,8 +578,8 @@ impl WindowsHiveParser {
                 parser_builder.recover_deleted(self.recover_cells);
 
                 let mut parser = parser_builder
-                        .build()
-                        .context("Failed to open Hive from byte stream")?;
+                    .build()
+                    .context("Failed to open Hive from byte stream")?;
 
                 self.default_parse(&mut parser, sink)
             }
@@ -654,11 +697,15 @@ impl WindowsHiveParser {
             sub_keys.append(&mut path.cell.deleted_keys);
 
             for sub_key in sub_keys {
-                if !seen.insert(sub_key.file_offset_absolute) {
-                    continue;
-                }
                 for trie_node in &node.children {
                     if trie_node.segment.matches(&sub_key.key_name) {
+                        let visit = (
+                            sub_key.file_offset_absolute,
+                            std::ptr::from_ref(trie_node),
+                        );
+                        if !seen.insert(visit) {
+                            continue;
+                        }
                         stack.push(HivePath {
                             cell: sub_key.clone(),
                             node: trie_node,
@@ -722,21 +769,18 @@ impl Parser for WindowsHiveParser {
         _diagnostic: &mut dyn FnMut(ParserIssue) -> Result<()>,
     ) -> Result<()> {
         if context.parser_name() != self.name() {
-            return Err(
-                ParserInputError::invalid("context", "context belongs to a different parser")
-                    .into(),
-            );
+            return Err(ParserInputError::invalid(
+                "context",
+                "context belongs to a different parser",
+            )
+            .into());
         }
 
         let artefact_name = match context.option("artefact") {
             Some(ParserOptionValue::String(value)) => value.as_str(),
             None => "",
             _ => {
-                return Err(ParserInputError::invalid(
-                    "artefact",
-                    "expected a string",
-                )
-                .into());
+                return Err(ParserInputError::invalid("artefact", "expected a string").into());
             }
         };
         let profile_name = match context.option("profile") {
@@ -759,7 +803,7 @@ impl Parser for WindowsHiveParser {
                 )
             })?
         };
-        
+
         if !artefact_name.is_empty() {
             let artefact = Artefact::str_to_artefact(artefact_name).ok_or_else(|| {
                 ParserInputError::invalid(

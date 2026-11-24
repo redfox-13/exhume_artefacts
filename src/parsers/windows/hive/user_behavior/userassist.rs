@@ -1,8 +1,8 @@
-use serde_json::{json, Value};
+use serde_json::json;
 
-use super::super::{hive_kind_prefix, parse_values, Artefact, Outcome, TrieNode as T};
+use super::super::{hive_kind_prefix, parse_value_map, Artefact, Outcome, TrieNode as T};
 
-const KIND: &str = hive_kind_prefix!("user_behavior.userassist");
+pub const KIND: &str = hive_kind_prefix!("user_behavior.userassist");
 
 pub(super) fn artefact() -> Artefact {
     Artefact {
@@ -17,26 +17,25 @@ pub(super) fn artefact() -> Artefact {
                                     T::any().sub(vec![T::lit("Count").emit(
                                         KIND,
                                         |object, cell| {
-                                            let entries: Vec<Value> =
-                                                parse_values(cell, |value| {
-                                                    let encoded_name = value.get_pretty_name();
-                                                    let decoded_name: String = encoded_name
-                                                        .chars()
-                                                        .map(|character| match character {
-                                                            'A'..='M' | 'a'..='m' => {
-                                                                ((character as u8) + 13) as char
-                                                            },
-                                                            'n'..='z' | 'N'..='Z' => {
-                                                                ((character as u8) - 13) as char
-                                                            }
-                                                            _ => character,
-                                                        })
-                                                        .collect();
-                                                    Some(json!({
-                                                        "name": decoded_name,
-                                                        "encoded_name": encoded_name,
-                                                    }))
-                                                });
+                                            let entries = parse_value_map(cell, |value| {
+                                                let encoded_name = value.get_pretty_name();
+                                                let decoded_name: String = encoded_name
+                                                    .chars()
+                                                    .map(|character| match character {
+                                                        'A'..='M' | 'a'..='m' => {
+                                                            ((character as u8) + 13) as char
+                                                        }
+                                                        'n'..='z' | 'N'..='Z' => {
+                                                            ((character as u8) - 13) as char
+                                                        }
+                                                        _ => character,
+                                                    })
+                                                    .collect();
+                                                Some((
+                                                    decoded_name,
+                                                    json!({ "encoded_name": encoded_name }),
+                                                ))
+                                            });
                                             object.text =
                                                 format!("UserAssist: {} entries", entries.len());
                                             object

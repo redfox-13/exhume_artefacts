@@ -1,8 +1,8 @@
-use serde_json::{json, Value};
+use serde_json::json;
 
-use super::super::{hive_kind_prefix, parse_values, Artefact, Outcome, TrieNode as T};
+use super::super::{hive_kind_prefix, registry_value_map, Artefact, Outcome, TrieNode as T};
 
-const KIND: &str = hive_kind_prefix!("user_behavior.feature_usage");
+pub const KIND: &str = hive_kind_prefix!("user_behavior.feature_usage");
 
 pub(super) fn artefact() -> Artefact {
     Artefact {
@@ -14,12 +14,7 @@ pub(super) fn artefact() -> Artefact {
                         T::lit("CurrentVersion").sub(vec![
                             T::lit("Explorer").sub(vec![T::lit("FeatureUsage").sub(vec![
                                 T::lit("AppSwitched").emit(KIND, |object, cell| {
-                                    let entries: Vec<Value> = parse_values(cell, |value| {
-                                        Some(json!({
-                                            "name": value.get_pretty_name(),
-                                            "value": super::super::value_text(value),
-                                        }))
-                                    });
+                                    let entries = registry_value_map(cell);
                                     object.text = format!(
                                         "Application-switch history: {} entries",
                                         entries.len()

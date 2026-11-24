@@ -1,8 +1,10 @@
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
-use super::super::{TrieNode as T, hive_kind_prefix, Artefact, Outcome, parse_values};
+use super::super::{
+    TrieNode as T, hive_kind_prefix, Artefact, Outcome, parse_value_map, value_text,
+};
 
-const KIND: &str = hive_kind_prefix!("persistence.session_manager");
+pub const KIND: &str = hive_kind_prefix!("persistence.session_manager");
 
 /// ControlSet\Control\Session Manager
 pub(super) fn artefact() -> Artefact {
@@ -13,9 +15,8 @@ pub(super) fn artefact() -> Artefact {
                 T::pre("ControlSet").sub(vec![
                     T::lit("Control").sub(vec![
                         T::lit("Session Manager").emit(KIND, |object, cell| {
-                            let values: Map<String, Value> =
-                                parse_values(cell, |value| {
-                                    let data = super::super::value_text(value);
+                            let values = parse_value_map(cell, |value| {
+                                    let data = value_text(value);
                                     match value.get_pretty_name().to_lowercase().as_str() {
                                         "bootexecute" => Some(("boot_execute".into(), json!(data))),
                                         "setupexecute" => {

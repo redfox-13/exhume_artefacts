@@ -1,8 +1,8 @@
-use serde_json::{json, Value};
+use serde_json::json;
 
-use super::super::{hive_kind_prefix, parse_values, Artefact, Outcome, TrieNode as T};
+use super::super::{hive_kind_prefix, registry_value_map, Artefact, Outcome, TrieNode as T};
 
-const KIND: &str = hive_kind_prefix!("program_execution.amcache");
+pub const KIND: &str = hive_kind_prefix!("program_execution.amcache");
 
 pub(super) fn artefact() -> Artefact {
     Artefact {
@@ -12,12 +12,7 @@ pub(super) fn artefact() -> Artefact {
                 T::lit("InventoryApplicationFile").sub(vec![T::any().emit(
                     KIND,
                     |object, cell| {
-                        let values: Vec<Value> = parse_values(cell, |value| {
-                            Some(json!({
-                                "name": value.get_pretty_name(),
-                                "value": super::super::value_text(value),
-                            }))
-                        });
+                        let values = registry_value_map(cell);
                         object.text = format!("Amcache file entry: {}", cell.key_name);
                         object.data.insert("file_entry".into(), json!(cell.key_name));
                         object
@@ -29,12 +24,7 @@ pub(super) fn artefact() -> Artefact {
                 T::lit("InventoryApplication").sub(vec![T::any().emit(
                     KIND,
                     |object, cell| {
-                        let values: Vec<Value> = parse_values(cell, |value| {
-                            Some(json!({
-                                "name": value.get_pretty_name(),
-                                "value": super::super::value_text(value),
-                            }))
-                        });
+                        let values = registry_value_map(cell);
                         object.text = format!("Amcache application entry: {}", cell.key_name);
                         object.data.insert("application_entry".into(), json!(cell.key_name));
                         object

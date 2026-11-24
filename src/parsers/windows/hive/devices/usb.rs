@@ -1,6 +1,6 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use super::super::{hive_kind_prefix, Artefact, Outcome, TrieNode as T};
+use super::super::{Artefact, Outcome, TrieNode as T, hive_kind_prefix};
 use super::{device_properties, set_time};
 
 pub const KIND: &str = hive_kind_prefix!("devices.usb");
@@ -11,10 +11,8 @@ pub fn artefact() -> Artefact {
         kind: KIND,
         build: || {
             vec![
-                T::pre("ControlSet").sub(vec![
-                    T::lit("Enum").sub(vec![
-                        T::lit("USB").sub(vec![
-                            T::any().sub(vec![
+                T::pre("ControlSet").sub(vec![T::lit("Enum").sub(vec![T::lit("USB").sub(vec![
+                    T::any().sub(vec![
                                 T::any()
                                     .sub(vec![
                                         T::lit("Properties").sub(vec![
@@ -58,9 +56,7 @@ pub fn artefact() -> Artefact {
                                         Outcome::Keep
                                     }),
                             ]),
-                        ]),
-                    ]),
-                ]),
+                ])])]),
             ]
         },
     }

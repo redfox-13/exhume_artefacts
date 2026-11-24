@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
 const APPLE_ABSOLUTE_TO_UNIX_SECONDS: f64 = 978_307_200.0;
+const FILETIME_TO_UNIX_OFFSET_NS: i128 = 116_444_736_000_000_000;
 
 pub(crate) fn apple_absolute_to_json(value: Option<f64>) -> Value {
     match value.and_then(apple_absolute_to_unix_ms) {
@@ -79,6 +80,29 @@ pub(crate) fn unix_seconds_to_json(value: Option<i64>) -> Value {
         _ => Value::Null,
     }
 }
+
+pub(crate) fn windows_filetime_to_json(filetime: u64) -> Value {
+    let unix_100ns = i128::from(filetime) - FILETIME_TO_UNIX_OFFSET_NS;
+
+    let seconds = unix_100ns.div_euclid(10_000_000);
+    let nanos = (unix_100ns.rem_euclid(10_000_000) * 100) as u32;
+
+    let Ok(seconds) = i64::try_from(seconds) else {
+        return Value::Null;
+    };
+
+    let Some(datetime) = DateTime::<Utc>::from_timestamp(seconds, nanos) else {
+        return Value::Null;
+    };
+
+    json!({
+        "original": filetime,
+        "original_epoch": "windows_filetime",
+        "unix_ms": datetime.timestamp_millis(),
+        "rfc3339": datetime.to_rfc3339(),
+    })
+}
+
 
 fn apple_absolute_to_unix_ms(value: f64) -> Option<i64> {
     if !value.is_finite() {

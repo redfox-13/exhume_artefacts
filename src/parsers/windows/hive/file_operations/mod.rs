@@ -1,14 +1,19 @@
 //! File-selection and navigation evidence from Windows registry hives.
+
 use super::Artefact;
 
-mod comdlg32;
-mod recent_docs;
-mod typed_paths;
+pub(super) mod comdlg32;
+pub(super) mod recent_docs;
+pub(super) mod shellbags;
+pub(super) mod typed_paths;
+pub(super) mod mru_controls;
 
-pub(super) fn profile() -> Vec<Artefact> {
+pub(super) fn artefacts() -> Vec<Artefact> {
     vec![
         comdlg32::artefact(),
         recent_docs::artefact(),
+        shellbags::artefact(),
         typed_paths::artefact(),
+        mru_controls::artefact(),
     ]
 }

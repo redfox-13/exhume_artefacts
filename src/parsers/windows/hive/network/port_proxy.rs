@@ -1,8 +1,8 @@
-use serde_json::{json, Value};
+use serde_json::json;
 
-use super::super::{hive_kind_prefix, parse_values, Artefact, Outcome, TrieNode as T};
+use super::super::{hive_kind_prefix, parse_value_map, value_text, Artefact, Outcome, TrieNode as T};
 
-const KIND: &str = hive_kind_prefix!("network.port_proxy");
+pub const KIND: &str = hive_kind_prefix!("network.port_proxy");
 
 pub(super) fn artefact() -> Artefact {
     Artefact {
@@ -12,11 +12,11 @@ pub(super) fn artefact() -> Artefact {
                 T::lit("PortProxy").sub(vec![T::any().sub(vec![T::any().emit(
                     KIND,
                     |object, cell| {
-                        let entries: Vec<Value> = parse_values(cell, |value| {
-                            Some(json!({
-                                "name": value.get_pretty_name(),
-                                "mapping": super::super::value_text(value),
-                            }))
+                        let entries = parse_value_map(cell, |value| {
+                            Some((
+                                value.get_pretty_name(),
+                                json!(value_text(value)),
+                            ))
                         });
                         object.text = format!("PortProxy {}: {} mappings", cell.path, entries.len());
                         object
