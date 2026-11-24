@@ -8,7 +8,7 @@ use super::super::{
 
 pub const KIND: &str = hive_kind_prefix!("browser_activity.typed_urls");
 
-pub(super) fn artefact() -> Artefact {
+pub(in crate::parsers::windows::hive) fn artefact() -> Artefact {
     Artefact {
         kind: KIND,
         build: || {

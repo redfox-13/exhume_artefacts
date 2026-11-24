@@ -4,7 +4,7 @@ use super::super::{hive_kind_prefix, parse_value_map, value_text, Artefact, Outc
 
 pub const KIND: &str = hive_kind_prefix!("network.port_proxy");
 
-pub(super) fn artefact() -> Artefact {
+pub(in crate::parsers::windows::hive) fn artefact() -> Artefact {
     Artefact {
         kind: KIND,
         build: || {

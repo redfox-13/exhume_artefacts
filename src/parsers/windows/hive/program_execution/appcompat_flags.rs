@@ -5,7 +5,7 @@ use super::super::{Artefact, Outcome, TrieNode as T, hive_kind_prefix, registry_
 
 pub const KIND: &str = hive_kind_prefix!("program_execution.appcompat_flags");
 
-pub(super) fn artefact() -> Artefact {
+pub(in crate::parsers::windows::hive) fn artefact() -> Artefact {
     Artefact {
         kind: KIND,
         build: || {

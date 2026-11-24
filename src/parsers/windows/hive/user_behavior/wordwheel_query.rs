@@ -7,7 +7,7 @@ use super::super::{
 
 pub const KIND: &str = hive_kind_prefix!("user_behavior.wordwheel_query");
 
-pub(super) fn artefact() -> Artefact {
+pub(in crate::parsers::windows::hive) fn artefact() -> Artefact {
     Artefact {
         kind: KIND,
         build: || {

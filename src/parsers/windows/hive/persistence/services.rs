@@ -7,7 +7,7 @@ use super::super::{
 pub const KIND: &str = hive_kind_prefix!("persistence.service");
 
 /// ControlSet\Services\<name>, service ordering, and SOFTWARE\...\Svchost
-pub(super) fn artefact() -> Artefact {
+pub(in crate::parsers::windows::hive) fn artefact() -> Artefact {
     Artefact {
         kind: KIND,
         build: || {

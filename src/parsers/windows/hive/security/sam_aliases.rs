@@ -5,7 +5,7 @@ use super::super::{Artefact, ObjectOutput, Outcome, TrieNode as T, hive_kind_pre
 
 pub const KIND: &str = hive_kind_prefix!("security.sam_aliases");
 
-pub(super) fn artefact() -> Artefact {
+pub(in crate::parsers::windows::hive) fn artefact() -> Artefact {
     Artefact {
         kind: KIND,
         build: || {

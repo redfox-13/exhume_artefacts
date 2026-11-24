@@ -4,7 +4,7 @@ use super::super::{Artefact, Outcome, TrieNode as T, hive_kind_prefix, registry_
 
 pub const KIND: &str = hive_kind_prefix!("sysinfo.windows_update_client");
 
-pub(super) fn artefact() -> Artefact {
+pub(in crate::parsers::windows::hive) fn artefact() -> Artefact {
     Artefact {
         kind: KIND,
         build: || {

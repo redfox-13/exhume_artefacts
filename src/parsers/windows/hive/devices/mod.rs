@@ -2,7 +2,7 @@
 use notatin::cell_key_node::CellKeyNode;
 use serde_json::{Map, Value, json};
 
-use super::{Artefact, ObjectOutput, Outcome, parse_time, parse_value_map, value_text};
+use super::{ObjectOutput, Outcome, parse_time, parse_value_map, value_text};
 pub(super) mod usb;
 pub(super) mod usbstor;
 pub(super) mod volume_mappings;
@@ -10,18 +10,6 @@ pub(super) mod emdmgmt;
 pub(super) mod audio_devices;
 pub(super) mod portable_devices;
 pub(super) mod print_devices;
-
-pub(super) fn artefacts() -> Vec<Artefact> {
-    vec![
-        usb::artefact(),
-        usbstor::artefact(),
-        volume_mappings::artefact(),
-        emdmgmt::artefact(),
-        audio_devices::artefact(),
-        portable_devices::artefact(),
-        print_devices::artefact(),
-    ]
-}
 
 pub(super) fn device_properties(
     cell: &CellKeyNode,

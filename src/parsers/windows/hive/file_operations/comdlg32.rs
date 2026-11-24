@@ -4,7 +4,7 @@ use super::super::{hive_kind_prefix, registry_value_map, Artefact, Outcome, Trie
 
 pub const KIND: &str = hive_kind_prefix!("file_operations.comdlg32");
 
-pub(super) fn artefact() -> Artefact {
+pub(in crate::parsers::windows::hive) fn artefact() -> Artefact {
     Artefact {
         kind: KIND,
         build: || {

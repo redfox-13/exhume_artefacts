@@ -8,7 +8,7 @@ pub const KIND: &str = hive_kind_prefix!("persistence.winlogon");
 
 /// Microsoft\Windows NT\CurrentVersion\Winlogon
 /// Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList
-pub(super) fn artefact() -> Artefact {
+pub(in crate::parsers::windows::hive) fn artefact() -> Artefact {
     Artefact {
         kind: KIND,
         build: || {

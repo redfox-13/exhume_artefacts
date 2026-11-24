@@ -9,7 +9,7 @@ use notatin::cell_key_value::CellKeyValue;
 
 pub const KIND: &str = hive_kind_prefix!("network.network_list");
 
-pub(super) fn artefact() -> Artefact {
+pub(in crate::parsers::windows::hive) fn artefact() -> Artefact {
     Artefact {
         kind: KIND,
         build: || {
